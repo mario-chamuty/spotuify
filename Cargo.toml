@@ -1,0 +1,57 @@
+[package]
+name = "spotuify"
+version = "0.1.0"
+edition = "2021"
+description = "A terminal UI Spotify client for Linux with local playback, search, playlists, queues, output selection and colored album art."
+license = "MIT"
+readme = "README.md"
+default-run = "spotuify"
+
+[[bin]]
+name = "spotuify"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+
+# TUI
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+
+# Spotify Web API (search, playlists, library, queue, devices, metadata)
+rspotify = { version = "0.13", default-features = false, features = [
+    "client-reqwest",
+    "reqwest-rustls-tls",
+] }
+
+# Local playback engine (open-source Spotify client) + OAuth helper
+librespot = { version = "0.6", default-features = false, features = [
+    "rodio-backend",
+] }
+
+# Audio output device enumeration (for media output selection)
+cpal = "0.15"
+
+# Album art
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+
+# Config & misc
+chrono = "0.4"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+dirs = "5"
+anyhow = "1"
+thiserror = "1"
+open = "5"
+
+# Logging to a file (TUI owns the terminal, so logs can't go to stdout)
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
