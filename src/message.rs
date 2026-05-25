@@ -4,7 +4,7 @@
 
 use ratatui::text::Line;
 
-use crate::model::{PlaylistRef, Track};
+use crate::model::{ConnectDevice, PlaylistRef, RemoteState, Track};
 use crate::spotify::SearchResults;
 
 /// How an opened track list should behave once it arrives.
@@ -31,5 +31,16 @@ pub enum Update {
         rows: u16,
         lines: Vec<Line<'static>>,
     },
+    /// A decoded cover image for the pixel-graphics (sixel/kitty) art path.
+    ArtImage {
+        track_uri: String,
+        image: image::DynamicImage,
+    },
+    /// The set of track URIs (from a recently shown list) the user has saved.
+    Liked(Vec<String>),
+    /// The user's Spotify Connect devices.
+    ConnectDevices(Vec<ConnectDevice>),
+    /// A polled snapshot of remote (Connect) playback.
+    RemoteState(Option<RemoteState>),
     Error(String),
 }

@@ -4,10 +4,14 @@
 //! credentials + audio cache, and the rspotify web-API token) live under
 //! `~/.cache/spotuify/`.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+
+use crate::keys::KeyBinding;
+use crate::theme::ThemeConfig;
 
 const APP_DIR: &str = "spotuify";
 
@@ -40,6 +44,35 @@ pub struct Config {
 
     /// Normalise loudness across tracks (replaygain-style).
     pub normalisation: bool,
+
+    /// Album-art rendering mode: `auto`, `halfblocks`, `sixel`, or `kitty`.
+    /// `auto` lets the terminal-graphics detector pick the best protocol and
+    /// falls back to coloured half-blocks otherwise.
+    pub art_mode: ArtMode,
+
+    /// Colour theme overrides (`[theme]` table). Unset fields use the default
+    /// Spotify-green look.
+    #[serde(default)]
+    pub theme: ThemeConfig,
+
+    /// Keybinding overrides (`[keys]` table): `action-name = "key"` or a list.
+    #[serde(default)]
+    pub keys: HashMap<String, KeyBinding>,
+}
+
+/// How album art is drawn.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ArtMode {
+    /// Detect the best terminal-graphics protocol; fall back to half-blocks.
+    #[default]
+    Auto,
+    /// Always render coloured half-blocks (works in any truecolor terminal).
+    Halfblocks,
+    /// Force the sixel protocol.
+    Sixel,
+    /// Force the kitty graphics protocol.
+    Kitty,
 }
 
 impl Default for Config {
@@ -52,6 +85,9 @@ impl Default for Config {
             volume: 70,
             cache_size_mb: Some(1024),
             normalisation: true,
+            art_mode: ArtMode::Auto,
+            theme: ThemeConfig::default(),
+            keys: HashMap::new(),
         }
     }
 }

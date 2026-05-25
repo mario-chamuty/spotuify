@@ -6,10 +6,14 @@ mod app;
 mod audio;
 mod auth;
 mod config;
+mod keys;
 mod message;
 mod model;
+mod mpris;
+mod persist;
 mod player;
 mod spotify;
+mod theme;
 mod ui;
 
 use std::io::{self, Stdout};
@@ -24,7 +28,7 @@ use ratatui::Terminal;
 use tracing_subscriber::EnvFilter;
 
 use crate::app::App;
-use crate::config::Config;
+use crate::config::{ArtMode, Config};
 use crate::player::Player;
 
 #[tokio::main]
@@ -51,10 +55,22 @@ async fn main() -> Result<()> {
         .await
         .context("could not start playback session")?;
 
+    // MPRIS media controls: a control channel feeds Actions back into the app,
+    // and a watch channel publishes a playback snapshot for property reads.
+    let (control_tx, control_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(mpris::Snapshot::default());
+    mpris::spawn(control_tx, snapshot_rx);
+
+    // Detect terminal pixel-graphics support *before* entering raw mode, since
+    // detection queries the terminal on stdout/stdin.
+    let picker = setup_picker(config.art_mode);
+
     let mut terminal = setup_terminal().context("setting up terminal")?;
     install_panic_hook();
 
     let mut app = App::new(config, auth.spotify, player);
+    app.set_picker(picker);
+    app.attach_external_controls(control_rx, snapshot_tx);
     let result = app.run(&mut terminal).await;
 
     restore_terminal(&mut terminal).ok();
@@ -63,6 +79,37 @@ async fn main() -> Result<()> {
         std::process::exit(1);
     }
     Ok(())
+}
+
+/// Build a pixel-graphics `Picker` per the configured `art_mode`. Returns
+/// `None` for `halfblocks` (or when detection picks half-blocks / fails), in
+/// which case the app uses the coloured half-block renderer.
+fn setup_picker(mode: ArtMode) -> Option<ratatui_image::picker::Picker> {
+    use ratatui_image::picker::{Picker, ProtocolType};
+
+    match mode {
+        ArtMode::Halfblocks => None,
+        ArtMode::Auto => match Picker::from_query_stdio() {
+            Ok(picker) if picker.protocol_type() != ProtocolType::Halfblocks => Some(picker),
+            Ok(_) => None, // detected half-blocks: use our richer renderer
+            Err(e) => {
+                tracing::info!("terminal graphics detection failed ({e}); using half-blocks");
+                None
+            }
+        },
+        ArtMode::Sixel | ArtMode::Kitty => {
+            // Forced protocol: query for the font size, then override the type.
+            let mut picker = match Picker::from_query_stdio() {
+                Ok(p) => p,
+                Err(_) => Picker::from_fontsize((8, 16)),
+            };
+            picker.set_protocol_type(match mode {
+                ArtMode::Sixel => ProtocolType::Sixel,
+                _ => ProtocolType::Kitty,
+            });
+            Some(picker)
+        }
+    }
 }
 
 fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {

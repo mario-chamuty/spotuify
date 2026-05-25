@@ -81,6 +81,9 @@ pub struct Player {
     position_ms: u32,
     position_anchor: Instant,
     current_id: Option<SpotifyId>,
+    /// Whether `current_id` has actually been loaded into librespot. A restored
+    /// session sets `current` without loading, so the first play loads it.
+    loaded: bool,
     rng_state: u64,
 }
 
@@ -140,6 +143,7 @@ impl Player {
             position_ms: 0,
             position_anchor: Instant::now(),
             current_id: None,
+            loaded: false,
             rng_state: seed(),
         })
     }
@@ -198,6 +202,7 @@ impl Player {
         self.current = Some(index);
         self.current_id = Some(id);
         self.inner.load(id, true, 0);
+        self.loaded = true;
         self.set_position(0);
         self.status = Status::Loading;
     }
@@ -214,6 +219,16 @@ impl Player {
                 self.status = Status::Paused;
             }
             Status::Paused => {
+                // A restored session hasn't loaded the track into librespot
+                // yet — load it at the saved position on the first play.
+                if !self.loaded {
+                    if let Some(id) = self.current_id {
+                        self.inner.load(id, true, self.position_ms);
+                        self.loaded = true;
+                        self.status = Status::Loading;
+                        return;
+                    }
+                }
                 self.inner.play();
                 self.position_anchor = Instant::now();
                 self.status = Status::Playing;
@@ -266,6 +281,7 @@ impl Player {
         self.status = Status::Stopped;
         self.current = None;
         self.current_id = None;
+        self.loaded = false;
         self.set_position(0);
     }
 
@@ -304,6 +320,43 @@ impl Player {
 
     pub fn toggle_shuffle(&mut self) {
         self.shuffle = !self.shuffle;
+    }
+
+    pub fn set_repeat(&mut self, repeat: Repeat) {
+        self.repeat = repeat;
+    }
+
+    pub fn set_shuffle(&mut self, shuffle: bool) {
+        self.shuffle = shuffle;
+    }
+
+    // ---- Session restore ---------------------------------------------------
+
+    /// Restore a saved queue/selection/position *without* starting playback.
+    /// The UI shows the track as paused; the user presses play to resume.
+    pub fn restore_session(&mut self, queue: Vec<Track>, current: Option<usize>, position_ms: u32) {
+        self.queue = queue;
+        match current {
+            Some(i) if i < self.queue.len() => {
+                self.current = Some(i);
+                self.current_id = SpotifyId::from_uri(&self.queue[i].uri).ok();
+                self.loaded = false;
+                self.status = Status::Paused;
+                self.position_ms = position_ms;
+                self.position_anchor = Instant::now();
+            }
+            _ => {
+                self.current = None;
+                self.current_id = None;
+                self.loaded = false;
+                self.status = Status::Stopped;
+            }
+        }
+    }
+
+    /// Position to persist (the interpolated position while playing).
+    pub fn saved_position_ms(&self) -> u32 {
+        self.interpolated_position()
     }
 
     // ---- Output device -----------------------------------------------------

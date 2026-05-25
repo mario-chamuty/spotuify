@@ -1,19 +1,37 @@
 //! Plain domain types decoupled from rspotify's models, so the UI and player
 //! never depend on the web-API crate's shapes directly.
 
-use rspotify::model::{FullTrack, Image, PlayableItem};
+use rspotify::model::{FullEpisode, FullTrack, Image, PlayableItem};
 use rspotify::prelude::Id;
+use serde::{Deserialize, Serialize};
 
-/// A playable track, flattened to exactly what the UI and player need.
-#[derive(Debug, Clone)]
+/// Whether a playable item is a music track or a podcast/audiobook episode.
+/// Both are loaded by librespot via their `spotify:…` URI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlayableKind {
+    Track,
+    Episode,
+}
+
+/// A playable item (track or episode), flattened to exactly what the UI and
+/// player need. The `uri` is the canonical `spotify:track:<id>` /
+/// `spotify:episode:<id>` form that librespot loads.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Track {
-    /// Canonical `spotify:track:<id>` URI (also what librespot loads).
     pub uri: String,
     pub name: String,
+    /// Artists (tracks) or the show name (episodes).
     pub artists: String,
+    /// Album (tracks) or publisher/show (episodes).
     pub album: String,
     pub album_art_url: Option<String>,
     pub duration_ms: u32,
+    #[serde(default = "default_kind")]
+    pub kind: PlayableKind,
+}
+
+fn default_kind() -> PlayableKind {
+    PlayableKind::Track
 }
 
 impl Track {
@@ -26,14 +44,32 @@ impl Track {
             album: t.album.name.clone(),
             album_art_url: best_image(&t.album.images),
             duration_ms: t.duration.num_milliseconds().max(0) as u32,
+            kind: PlayableKind::Track,
         })
+    }
+
+    /// Build a playable from a podcast/audiobook episode.
+    pub fn from_episode(e: FullEpisode) -> Self {
+        Self {
+            uri: e.id.uri(),
+            name: e.name,
+            artists: e.show.name.clone(),
+            album: e.show.publisher.clone(),
+            album_art_url: best_image(&e.images).or_else(|| best_image(&e.show.images)),
+            duration_ms: e.duration.num_milliseconds().max(0) as u32,
+            kind: PlayableKind::Episode,
+        }
     }
 
     pub fn from_playable(item: PlayableItem) -> Option<Self> {
         match item {
             PlayableItem::Track(t) => Track::from_full(t),
-            PlayableItem::Episode(_) => None,
+            PlayableItem::Episode(e) => Some(Track::from_episode(e)),
         }
+    }
+
+    pub fn is_episode(&self) -> bool {
+        self.kind == PlayableKind::Episode
     }
 }
 
@@ -51,6 +87,30 @@ pub struct PlaylistRef {
 pub struct OutputDevice {
     pub name: String,
     pub is_default: bool,
+}
+
+/// A Spotify Connect device reported by the Web API (phone, speaker, desktop…).
+#[derive(Debug, Clone)]
+pub struct ConnectDevice {
+    /// Spotify device id, used as the transfer/transport target. `None` for
+    /// restricted devices that cannot be controlled directly.
+    pub id: Option<String>,
+    pub name: String,
+    /// Human-readable device category (`Smartphone`, `Speaker`, …).
+    pub kind: String,
+    pub is_active: bool,
+    pub volume_percent: Option<u8>,
+}
+
+/// A snapshot of remote (Connect) playback polled from the Web API.
+#[derive(Debug, Clone)]
+pub struct RemoteState {
+    pub track: Option<Track>,
+    pub is_playing: bool,
+    pub progress_ms: u32,
+    pub device_id: Option<String>,
+    pub volume_percent: Option<u8>,
+    pub shuffle: bool,
 }
 
 fn join_artists<'a>(names: impl Iterator<Item = &'a str>) -> String {

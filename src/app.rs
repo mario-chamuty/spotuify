@@ -6,7 +6,7 @@ use std::io::Stdout;
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind};
 use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
 use ratatui::widgets::ListState;
@@ -16,10 +16,12 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use crate::albumart::AlbumArt;
 use crate::audio;
 use crate::config::Config;
+use crate::keys::{Action, Keymap};
 use crate::message::{OpenMode, Update};
 use crate::model::{OutputDevice, Track};
 use crate::player::Player;
 use crate::spotify::{SearchKind, SearchResults, Spotify};
+use crate::theme::Theme;
 use crate::{albumart, ui};
 
 pub type Tui = Terminal<CrosstermBackend<Stdout>>;
@@ -40,15 +42,32 @@ pub enum View {
 pub enum Focus {
     List,
     Input,
+    Filter,
+}
+
+/// A rendered row in the Devices view. Headers are non-selectable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceRow {
+    Header,
+    /// Index into `App::devices` (local audio output).
+    Local(usize),
+    /// Index into `App::connect_devices` (Spotify Connect).
+    Connect(usize),
 }
 
 pub struct App {
     pub config: Config,
     pub spotify: Spotify,
     pub player: Player,
+    pub theme: Theme,
+    pub keymap: Keymap,
 
     updates_tx: UnboundedSender<Update>,
     updates_rx: UnboundedReceiver<Update>,
+
+    // External controls (MPRIS): incoming actions + outgoing playback snapshot.
+    control_rx: Option<UnboundedReceiver<crate::keys::Action>>,
+    snapshot_tx: Option<tokio::sync::watch::Sender<crate::mpris::Snapshot>>,
 
     pub view: View,
     pub focus: Focus,
@@ -60,6 +79,16 @@ pub struct App {
     pub search_kind: SearchKind,
     pub search_results: Option<SearchResults>,
     pub search_state: ListState,
+
+    // Search history (most-recent last). `history_pos` is the index currently
+    // recalled while editing, or `None` when typing fresh text.
+    pub search_history: Vec<String>,
+    history_pos: Option<usize>,
+
+    // Type-to-filter. When active, `filter_query` filters the focused list and
+    // `filter_map` maps visible row indices back to underlying item indices.
+    pub filter_query: String,
+    pub filter_map: Vec<usize>,
 
     // Library (user playlists)
     pub playlists: Vec<crate::model::PlaylistRef>,
@@ -75,21 +104,92 @@ pub struct App {
     pub devices: Vec<OutputDevice>,
     pub device_state: ListState,
 
-    // Album art
+    // Spotify Connect (Web API) remote devices and remote-control state.
+    pub connect_devices: Vec<crate::model::ConnectDevice>,
+    /// When `Some`, transport routes to this Connect device id (remote mode);
+    /// `None` means local librespot playback.
+    pub remote_device_id: Option<String>,
+    /// Latest polled remote playback snapshot (in remote mode).
+    pub remote_state: Option<crate::model::RemoteState>,
+
+    // Set of liked-track URIs (for the ♥ indicator), kept best-effort.
+    pub liked: std::collections::HashSet<String>,
+
+    // A modal text prompt (playlist create/rename) or playlist picker overlay.
+    pub prompt: Option<Prompt>,
+    pub picker: Option<Picker>,
+
+    // Album art (half-block path)
     pub art: Option<AlbumArt>,
     art_pending: Option<(String, u16, u16)>,
     pub art_size: (u16, u16),
+
+    // Pixel-graphics art (sixel/kitty/iTerm via ratatui-image). `image_picker`
+    // is set when a pixel protocol is active; `pixel_art` holds the current
+    // track's resizable protocol.
+    pub image_picker: Option<ratatui_image::picker::Picker>,
+    pub pixel_art: Option<PixelArt>,
+    pixel_pending: Option<String>,
+}
+
+/// A decoded album cover bound to a terminal pixel-graphics protocol.
+pub struct PixelArt {
+    pub track_uri: String,
+    pub protocol: ratatui_image::protocol::StatefulProtocol,
+}
+
+/// A modal single-line text prompt. `on_submit` records what to do with the
+/// entered text.
+#[derive(Debug, Clone)]
+pub struct Prompt {
+    pub title: String,
+    pub input: String,
+    pub kind: PromptKind,
+}
+
+#[derive(Debug, Clone)]
+pub enum PromptKind {
+    CreatePlaylist,
+    RenamePlaylist { id: String },
+}
+
+/// A modal list picker (currently only used to choose a target playlist for
+/// "add to playlist").
+#[derive(Debug, Clone)]
+pub struct Picker {
+    pub title: String,
+    pub state: ListState,
+    /// (playlist id, label) rows.
+    pub items: Vec<(String, String)>,
+    /// The track URI to add to the chosen playlist.
+    pub track_uri: String,
 }
 
 impl App {
-    pub fn new(config: Config, spotify: Spotify, player: Player) -> Self {
+    pub fn new(config: Config, spotify: Spotify, mut player: Player) -> Self {
         let (updates_tx, updates_rx) = tokio::sync::mpsc::unbounded_channel();
-        Self {
+        let theme = Theme::from_config(&config.theme);
+        let keymap = Keymap::build(&config.keys);
+
+        // Restore the previous session (queue/position/prefs) — paused.
+        let mut search_history = Vec::new();
+        if let Some(state) = crate::persist::PersistedState::load() {
+            player.restore_session(state.queue, state.current_index, state.position_ms);
+            player.set_shuffle(state.shuffle);
+            player.set_repeat(state.repeat.into());
+            search_history = state.search_history;
+        }
+
+        let mut app = Self {
             config,
             spotify,
             player,
+            theme,
+            keymap,
             updates_tx,
             updates_rx,
+            control_rx: None,
+            snapshot_tx: None,
             view: View::Search,
             focus: Focus::Input,
             should_quit: false,
@@ -98,6 +198,10 @@ impl App {
             search_kind: SearchKind::Tracks,
             search_results: None,
             search_state: ListState::default(),
+            search_history,
+            history_pos: None,
+            filter_query: String::new(),
+            filter_map: Vec::new(),
             playlists: Vec::new(),
             library_state: ListState::default(),
             context_title: String::new(),
@@ -106,16 +210,49 @@ impl App {
             queue_state: ListState::default(),
             devices: Vec::new(),
             device_state: ListState::default(),
+            connect_devices: Vec::new(),
+            remote_device_id: None,
+            remote_state: None,
+            liked: std::collections::HashSet::new(),
+            prompt: None,
+            picker: None,
             art: None,
             art_pending: None,
             art_size: (0, 0),
+            image_picker: None,
+            pixel_art: None,
+            pixel_pending: None,
+        };
+        // Reflect a restored now-playing track in the queue selection.
+        if let Some(i) = app.player.current {
+            app.queue_state.select(Some(i));
         }
+        app
+    }
+
+    /// Set the terminal pixel-graphics picker (enables sixel/kitty art). When
+    /// `None`, album art uses the coloured half-block renderer.
+    pub fn set_picker(&mut self, picker: Option<ratatui_image::picker::Picker>) {
+        self.image_picker = picker;
+    }
+
+    /// Attach the MPRIS external-control channel and snapshot publisher.
+    pub fn attach_external_controls(
+        &mut self,
+        control_rx: UnboundedReceiver<crate::keys::Action>,
+        snapshot_tx: tokio::sync::watch::Sender<crate::mpris::Snapshot>,
+    ) {
+        self.control_rx = Some(control_rx);
+        self.snapshot_tx = Some(snapshot_tx);
     }
 
     pub async fn run(&mut self, terminal: &mut Tui) -> Result<()> {
         let mut events = EventStream::new();
         let mut ticker = tokio::time::interval(Duration::from_millis(250));
+        let mut remote_poll = tokio::time::interval(Duration::from_millis(1500));
         let mut player_events = self.player.take_events();
+        // Take the external-control receiver out so we can borrow it in select!.
+        let mut control_rx = self.control_rx.take();
 
         self.spawn_load_playlists();
         self.refresh_devices();
@@ -123,6 +260,7 @@ impl App {
         while !self.should_quit {
             terminal.draw(|f| ui::draw(f, self))?;
             self.maybe_request_art();
+            self.publish_snapshot();
 
             tokio::select! {
                 maybe_event = events.next() => {
@@ -133,67 +271,161 @@ impl App {
                     }
                 }
                 _ = ticker.tick() => {}
+                _ = remote_poll.tick() => self.spawn_poll_remote(),
                 Some(event) = player_events.recv() => {
                     if self.player.on_event(event) {
                         self.on_track_changed();
                     }
                 }
+                Some(action) = recv_opt(&mut control_rx) => self.do_action(action),
                 Some(update) = self.updates_rx.recv() => self.handle_update(update),
             }
         }
 
-        // Persist any volume/device changes the user made this session.
+        // Persist volume/device config and the full session state on quit.
         self.config.volume = self.player.volume_percent();
         let _ = self.config.save();
+        self.save_state();
         Ok(())
+    }
+
+    /// Save the queue/position/preferences for the next launch.
+    fn save_state(&self) {
+        let state = crate::persist::PersistedState {
+            queue: self.player.queue.clone(),
+            current_index: self.player.current,
+            position_ms: self.player.saved_position_ms(),
+            shuffle: self.player.shuffle,
+            repeat: self.player.repeat.into(),
+            volume: self.player.volume_percent(),
+            search_history: self.search_history.clone(),
+        };
+        if let Err(e) = state.save() {
+            tracing::warn!("saving session state failed: {e}");
+        }
+    }
+
+    /// Publish a playback snapshot for the MPRIS task (no-op if not attached).
+    fn publish_snapshot(&self) {
+        let Some(tx) = &self.snapshot_tx else { return };
+        let status = self.playback_status();
+        let track = self.player.current_track();
+        let snap = crate::mpris::Snapshot {
+            playing: status == crate::player::Status::Playing,
+            stopped: status == crate::player::Status::Stopped,
+            has_track: track.is_some(),
+            track_uri: track.map(|t| t.uri.clone()).unwrap_or_default(),
+            title: track.map(|t| t.name.clone()).unwrap_or_default(),
+            artist: track.map(|t| t.artists.clone()).unwrap_or_default(),
+            album: track.map(|t| t.album.clone()).unwrap_or_default(),
+            art_url: track.and_then(|t| t.album_art_url.clone()),
+            length_us: track.map(|t| t.duration_ms as i64 * 1000).unwrap_or(0),
+            position_us: self.playback_position() as i64 * 1000,
+            volume: self.player.volume_percent() as f64 / 100.0,
+            can_next: !self.player.queue.is_empty(),
+            can_prev: !self.player.queue.is_empty(),
+        };
+        // Only send when something changed to avoid signal spam.
+        if tx.borrow().track_uri != snap.track_uri
+            || tx.borrow().playing != snap.playing
+            || (tx.borrow().position_us - snap.position_us).abs() > 900_000
+            || tx.borrow().volume != snap.volume
+        {
+            let _ = tx.send(snap);
+        }
     }
 
     // ---- Input -------------------------------------------------------------
 
     fn handle_key(&mut self, key: KeyEvent) {
-        if self.focus == Focus::Input {
-            self.handle_input_key(key);
-            return;
+        // Free-text input modes consume keys directly (typing, not bindings).
+        match self.focus {
+            Focus::Input => return self.handle_input_key(key),
+            Focus::Filter => return self.handle_filter_key(key),
+            Focus::List => {}
         }
 
-        // Ctrl-C always quits.
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-            self.should_quit = true;
+        // Modal overlays capture keys before any keybinding resolution.
+        if self.picker.is_some() {
+            self.handle_picker_key(key);
             return;
         }
+        if self.prompt.is_some() {
+            return self.handle_prompt_key(key);
+        }
 
-        match key.code {
-            KeyCode::Char('q') => self.should_quit = true,
-            KeyCode::Char(' ') => self.player.toggle_pause(),
-            KeyCode::Char('n') => self.player.next(),
-            KeyCode::Char('b') => self.player.previous(),
-            KeyCode::Char('+') | KeyCode::Char('=') => self.player.volume_step(VOLUME_STEP),
-            KeyCode::Char('-') | KeyCode::Char('_') => self.player.volume_step(-VOLUME_STEP),
-            KeyCode::Char('s') => {
+        // Resolve the chord to an action via the (configurable) keymap.
+        let Some(action) = self.keymap.action(key.code, key.modifiers) else {
+            return;
+        };
+        self.do_action(action);
+    }
+
+    /// Dispatch a resolved [`Action`]. This is also the entry point used by
+    /// external controllers (MPRIS) so behaviour stays in one place.
+    pub fn do_action(&mut self, action: Action) {
+        match action {
+            Action::Quit => self.should_quit = true,
+            Action::PlayPause => self.transport_toggle_pause(),
+            Action::Next => self.transport_next(),
+            Action::Prev => self.transport_prev(),
+            Action::VolumeUp => self.transport_volume_step(VOLUME_STEP),
+            Action::VolumeDown => self.transport_volume_step(-VOLUME_STEP),
+            Action::SeekForward => self.transport_seek_relative(5),
+            Action::SeekBack => self.transport_seek_relative(-5),
+            Action::ToggleShuffle => {
                 self.player.toggle_shuffle();
                 self.status = format!("Shuffle {}", on_off(self.player.shuffle));
             }
-            KeyCode::Char('r') => {
+            Action::CycleRepeat => {
                 self.player.cycle_repeat();
                 self.status = format!("Repeat: {}", self.player.repeat.label());
             }
-            KeyCode::Char('[') => self.player.seek_relative(-5),
-            KeyCode::Char(']') => self.player.seek_relative(5),
-            KeyCode::Char('1') => self.view = View::Search,
-            KeyCode::Char('2') => self.goto_library(),
-            KeyCode::Char('3') => self.view = View::Tracklist,
-            KeyCode::Char('4') => self.view = View::Queue,
-            KeyCode::Char('5') => self.goto_devices(),
-            KeyCode::Tab => self.cycle_view(),
-            KeyCode::Char('?') => {
-                self.status =
-                    "[1-5] tabs  Tab cycle  Enter play/open  e enqueue  space pause  n/b next/prev  +/- vol  [ ] seek  s shuffle  r repeat  q quit".to_string();
+            Action::TabSearch => self.view = View::Search,
+            Action::TabLibrary => self.goto_library(),
+            Action::TabTracks => self.view = View::Tracklist,
+            Action::TabQueue => self.view = View::Queue,
+            Action::TabDevices => self.goto_devices(),
+            Action::CycleTab => self.cycle_view(),
+            Action::Help => self.show_help(),
+            Action::FocusSearch => {
+                if self.view == View::Search {
+                    self.focus = Focus::Input;
+                }
             }
-            KeyCode::Char('/') | KeyCode::Char('i') if self.view == View::Search => {
-                self.focus = Focus::Input;
+            Action::Up => {
+                let len = self.current_list_len();
+                move_sel(self.active_state(), len, -1);
             }
-            _ => self.handle_view_key(key),
+            Action::Down => {
+                let len = self.current_list_len();
+                move_sel(self.active_state(), len, 1);
+            }
+            Action::Top => {
+                if self.current_list_len() > 0 {
+                    self.active_state().select(Some(0));
+                }
+            }
+            Action::Bottom => {
+                let len = self.current_list_len();
+                if len > 0 {
+                    self.active_state().select(Some(len - 1));
+                }
+            }
+            Action::Activate => self.activate_selection(),
+            Action::Enqueue => self.enqueue_selection(),
+            Action::ToggleLike => self.toggle_like_selection(),
+            Action::AddToPlaylist => self.open_add_to_playlist(),
+            Action::EnterFilter => self.enter_filter(),
+            Action::CreatePlaylist => self.prompt_create_playlist(),
+            Action::RenamePlaylist => self.prompt_rename_playlist(),
+            Action::DeletePlaylist => self.delete_selected_playlist(),
         }
+    }
+
+    fn show_help(&mut self) {
+        self.status =
+            "[1-5] tabs · Tab cycle · Enter play/open · e enqueue · / filter · L like · a add-to-playlist · space pause · n/b next/prev · +/- vol · [ ] seek · s shuffle · r repeat · q quit".to_string();
     }
 
     fn handle_input_key(&mut self, key: KeyEvent) {
@@ -201,26 +433,20 @@ impl App {
             KeyCode::Esc => self.focus = Focus::List,
             KeyCode::Enter => {
                 self.focus = Focus::List;
+                self.history_reset();
                 self.spawn_search();
             }
             KeyCode::Backspace => {
                 self.search_input.pop();
+                self.history_pos = None;
             }
             KeyCode::Tab => self.cycle_search_kind(),
-            KeyCode::Char(c) => self.search_input.push(c),
-            _ => {}
-        }
-    }
-
-    fn handle_view_key(&mut self, key: KeyEvent) {
-        let len = self.current_list_len();
-        match key.code {
-            KeyCode::Down | KeyCode::Char('j') => move_sel(self.active_state(), len, 1),
-            KeyCode::Up | KeyCode::Char('k') => move_sel(self.active_state(), len, -1),
-            KeyCode::Char('g') if len > 0 => self.active_state().select(Some(0)),
-            KeyCode::Char('G') if len > 0 => self.active_state().select(Some(len - 1)),
-            KeyCode::Enter => self.activate_selection(),
-            KeyCode::Char('e') => self.enqueue_selection(),
+            KeyCode::Up => self.history_prev(),
+            KeyCode::Down => self.history_next(),
+            KeyCode::Char(c) => {
+                self.search_input.push(c);
+                self.history_pos = None;
+            }
             _ => {}
         }
     }
@@ -252,26 +478,73 @@ impl App {
     fn goto_devices(&mut self) {
         self.view = View::Devices;
         self.refresh_devices();
+        self.spawn_refresh_connect_devices();
     }
 
     fn refresh_devices(&mut self) {
         self.devices = audio::output_devices();
-        // Highlight the currently active device.
-        let active = self.player.current_device();
-        let idx = match active {
-            Some(name) => self.devices.iter().position(|d| d.name == name),
-            None => self.devices.iter().position(|d| d.is_default),
-        };
+        // Select the first selectable row (skip the leading header).
+        let rows = self.device_rows();
+        let idx = rows.iter().position(|r| !matches!(r, DeviceRow::Header));
         self.device_state.select(idx.or(Some(0)));
+    }
+
+    /// Fetch the user's Spotify Connect devices in the background.
+    fn spawn_refresh_connect_devices(&self) {
+        let spotify = self.spotify.clone();
+        let tx = self.updates_tx.clone();
+        tokio::spawn(async move {
+            match spotify.connect_devices().await {
+                Ok(devs) => {
+                    let _ = tx.send(Update::ConnectDevices(devs));
+                }
+                Err(e) => tracing::warn!("listing Connect devices failed: {e}"),
+            }
+        });
+    }
+
+    /// Poll remote playback state (only meaningful in remote mode).
+    fn spawn_poll_remote(&self) {
+        if !self.remote_active() {
+            return;
+        }
+        let spotify = self.spotify.clone();
+        let tx = self.updates_tx.clone();
+        tokio::spawn(async move {
+            match spotify.current_playback().await {
+                Ok(state) => {
+                    let _ = tx.send(Update::RemoteState(state));
+                }
+                Err(e) => tracing::warn!("polling remote playback failed: {e}"),
+            }
+        });
     }
 
     fn current_list_len(&self) -> usize {
         match self.view {
             View::Search => self.search_results.as_ref().map_or(0, search_len),
-            View::Library => self.playlists.len() + 1, // +1 for "Liked Songs"
-            View::Tracklist => self.context_tracks.len(),
-            View::Queue => self.player.queue.len(),
-            View::Devices => self.devices.len(),
+            View::Library => {
+                if self.filter_active() {
+                    self.filter_map.len()
+                } else {
+                    self.playlists.len() + 1 // +1 for "Liked Songs"
+                }
+            }
+            View::Tracklist => {
+                if self.filter_active() {
+                    self.filter_map.len()
+                } else {
+                    self.context_tracks.len()
+                }
+            }
+            View::Queue => {
+                if self.filter_active() {
+                    self.filter_map.len()
+                } else {
+                    self.player.queue.len()
+                }
+            }
+            View::Devices => self.device_rows().len(),
         }
     }
 
@@ -285,6 +558,117 @@ impl App {
         }
     }
 
+    // ---- Visible (filter-aware) index helpers used by the UI ---------------
+
+    /// Underlying tracklist indices currently visible (after filtering).
+    pub fn tracklist_visible_indices(&self) -> Vec<usize> {
+        if self.filter_active() {
+            self.filter_map.clone()
+        } else {
+            (0..self.context_tracks.len()).collect()
+        }
+    }
+
+    /// Underlying queue indices currently visible (after filtering).
+    pub fn queue_visible_indices(&self) -> Vec<usize> {
+        if self.filter_active() {
+            self.filter_map.clone()
+        } else {
+            (0..self.player.queue.len()).collect()
+        }
+    }
+
+    /// Library row indices (0 = Liked Songs, then playlist index+1).
+    pub fn library_visible_indices(&self) -> Vec<usize> {
+        if self.filter_active() {
+            self.filter_map.clone()
+        } else {
+            (0..self.playlists.len() + 1).collect()
+        }
+    }
+
+    /// All rendered rows of the Devices view, including non-selectable headers.
+    pub fn device_rows(&self) -> Vec<DeviceRow> {
+        let mut rows = vec![DeviceRow::Header];
+        for i in 0..self.devices.len() {
+            rows.push(DeviceRow::Local(i));
+        }
+        if !self.connect_devices.is_empty() {
+            rows.push(DeviceRow::Header);
+            for i in 0..self.connect_devices.len() {
+                rows.push(DeviceRow::Connect(i));
+            }
+        }
+        rows
+    }
+
+    // ---- Playback state accessors (local or remote) ------------------------
+
+    /// Whether transport is currently routed to a Connect device.
+    pub fn remote_active(&self) -> bool {
+        self.remote_device_id.is_some()
+    }
+
+    /// The active Connect device id, if in remote mode.
+    pub fn active_remote_device_id(&self) -> Option<String> {
+        self.remote_device_id.clone()
+    }
+
+    /// The track to display: the remote snapshot's track in remote mode (when
+    /// known), otherwise the local player's current track.
+    pub fn displayed_track(&self) -> Option<&Track> {
+        if self.remote_active() {
+            if let Some(s) = &self.remote_state {
+                if let Some(t) = &s.track {
+                    return Some(t);
+                }
+            }
+        }
+        self.player.current_track()
+    }
+
+    /// Volume percentage to display (remote device volume in remote mode).
+    pub fn displayed_volume_percent(&self) -> u8 {
+        if self.remote_active() {
+            if let Some(v) = self.remote_state.as_ref().and_then(|s| s.volume_percent) {
+                return v;
+            }
+        }
+        self.player.volume_percent()
+    }
+
+    /// Shuffle state to display (remote shuffle in remote mode).
+    pub fn displayed_shuffle(&self) -> bool {
+        if self.remote_active() {
+            if let Some(s) = &self.remote_state {
+                return s.shuffle;
+            }
+        }
+        self.player.shuffle
+    }
+
+    /// Current playback position (remote snapshot if remote, else local).
+    pub fn playback_position(&self) -> u32 {
+        if self.remote_active() {
+            self.remote_state.as_ref().map(|s| s.progress_ms).unwrap_or(0)
+        } else {
+            self.player.interpolated_position()
+        }
+    }
+
+    /// Current playback status (derived from remote snapshot if remote).
+    pub fn playback_status(&self) -> crate::player::Status {
+        if self.remote_active() {
+            match &self.remote_state {
+                Some(s) if s.is_playing => crate::player::Status::Playing,
+                Some(_) => crate::player::Status::Paused,
+                None => crate::player::Status::Stopped,
+            }
+        } else {
+            self.player.status
+        }
+    }
+
     // ---- Actions -----------------------------------------------------------
 
     fn activate_selection(&mut self) {
@@ -292,14 +676,22 @@ impl App {
             View::Search => self.activate_search_selection(),
             View::Library => self.activate_library_selection(),
             View::Tracklist => {
-                if let Some(i) = self.tracklist_state.selected() {
+                if let Some(i) = self
+                    .tracklist_state
+                    .selected()
+                    .and_then(|v| self.resolve_index(v))
+                {
                     let tracks = self.context_tracks.clone();
                     self.player.play_tracks(tracks, i);
                     self.on_track_changed();
                 }
             }
             View::Queue => {
-                if let Some(i) = self.queue_state.selected() {
+                if let Some(i) = self
+                    .queue_state
+                    .selected()
+                    .and_then(|v| self.resolve_index(v))
+                {
                     self.player.play_now(i);
                     self.on_track_changed();
                 }
@@ -336,11 +728,37 @@ impl App {
                     self.spawn_open_playlist(p.id.clone(), p.name.clone(), OpenMode::Show);
                 }
             }
+            SearchResults::Episodes(eps) => {
+                // Play the whole episode result list from the selection.
+                let tracks: Vec<Track> = eps
+                    .iter()
+                    .map(|e| Track {
+                        uri: e.uri.clone(),
+                        name: e.name.clone(),
+                        artists: e.show.clone(),
+                        album: String::new(),
+                        album_art_url: e.album_art_url.clone(),
+                        duration_ms: e.duration_ms,
+                        kind: crate::model::PlayableKind::Episode,
+                    })
+                    .collect();
+                self.player.play_tracks(tracks, i);
+                self.on_track_changed();
+            }
+            SearchResults::Shows(shows) => {
+                if let Some(s) = shows.get(i) {
+                    self.spawn_open_show(s.id.clone(), s.name.clone());
+                }
+            }
         }
     }
 
     fn activate_library_selection(&mut self) {
-        let Some(i) = self.library_state.selected() else {
+        let Some(i) = self
+            .library_state
+            .selected()
+            .and_then(|v| self.resolve_index(v))
+        else {
             return;
         };
         if i == 0 {
@@ -351,12 +769,26 @@ impl App {
     }
 
     fn activate_device_selection(&mut self) {
-        let Some(i) = self.device_state.selected() else {
+        let Some(sel) = self.device_state.selected() else {
             return;
         };
+        match self.device_rows().get(sel).copied() {
+            Some(DeviceRow::Local(i)) => self.select_local_device(i),
+            Some(DeviceRow::Connect(i)) => self.select_connect_device(i),
+            _ => {} // header or out of range
+        }
+    }
+
+    fn select_local_device(&mut self, i: usize) {
         let Some(dev) = self.devices.get(i).cloned() else {
             return;
         };
+        // Leaving remote mode: stop polling and return control to librespot.
+        let was_remote = self.remote_device_id.take();
+        self.remote_state = None;
+        if was_remote.is_some() {
+            self.status = "Back to local playback".to_string();
+        }
         let device = if dev.is_default { None } else { Some(dev.name.clone()) };
         match self.player.set_output_device(device.clone()) {
             Ok(()) => {
@@ -366,6 +798,28 @@ impl App {
             }
             Err(e) => self.status = format!("Output change failed: {e}"),
         }
+    }
+
+    fn select_connect_device(&mut self, i: usize) {
+        let Some(dev) = self.connect_devices.get(i).cloned() else {
+            return;
+        };
+        let Some(id) = dev.id.clone() else {
+            self.status = format!("“{}” cannot be controlled remotely.", dev.name);
+            return;
+        };
+        // Enter remote mode: transfer playback to the Connect device and start
+        // polling its state.
+        self.remote_device_id = Some(id.clone());
+        self.remote_state = None;
+        self.status = format!("Transferring playback → {}", dev.name);
+        let spotify = self.spotify.clone();
+        let tx = self.updates_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = spotify.transfer_playback(&id, true).await {
+                let _ = tx.send(Update::Error(e.to_string()));
+            }
+        });
     }
 
     fn enqueue_selection(&mut self) {
@@ -389,12 +843,449 @@ impl App {
         }
     }
 
+    // ---- Transport: routes to the Connect device in remote mode, else local
+
+    fn transport_toggle_pause(&mut self) {
+        if let Some(id) = self.remote_device_id.clone() {
+            let want_play = !self
+                .remote_state
+                .as_ref()
+                .map(|s| s.is_playing)
+                .unwrap_or(false);
+            // Optimistic local flip for snappy UI; the next poll corrects it.
+            if let Some(s) = self.remote_state.as_mut() {
+                s.is_playing = want_play;
+            }
+            let spotify = self.spotify.clone();
+            let tx = self.updates_tx.clone();
+            tokio::spawn(async move {
+                let res = if want_play {
+                    spotify.remote_resume(&id).await
+                } else {
+                    spotify.remote_pause(&id).await
+                };
+                if let Err(e) = res {
+                    let _ = tx.send(Update::Error(e.to_string()));
+                }
+            });
+        } else {
+            self.player.toggle_pause();
+        }
+    }
+
+    fn transport_next(&mut self) {
+        if let Some(id) = self.remote_device_id.clone() {
+            self.remote_call(move |s| async move { s.remote_next(&id).await });
+        } else {
+            self.player.next();
+            self.on_track_changed();
+        }
+    }
+
+    fn transport_prev(&mut self) {
+        if let Some(id) = self.remote_device_id.clone() {
+            self.remote_call(move |s| async move { s.remote_previous(&id).await });
+        } else {
+            self.player.previous();
+            self.on_track_changed();
+        }
+    }
+
+    fn transport_seek_relative(&mut self, secs: i64) {
+        if let Some(id) = self.remote_device_id.clone() {
+            let cur = self.playback_position() as i64;
+            let target = (cur + secs * 1000).max(0) as u32;
+            self.remote_call(move |s| async move { s.remote_seek(target, &id).await });
+        } else {
+            self.player.seek_relative(secs);
+        }
+    }
+
+    fn transport_volume_step(&mut self, delta: i32) {
+        if let Some(id) = self.remote_device_id.clone() {
+            let cur = self
+                .remote_state
+                .as_ref()
+                .and_then(|s| s.volume_percent)
+                .unwrap_or(50) as i32;
+            // delta is in mixer units (0..=65535); convert to ~percent steps.
+            let pct_delta = (delta * 100) / (u16::MAX as i32);
+            let new = (cur + pct_delta).clamp(0, 100) as u8;
+            if let Some(s) = self.remote_state.as_mut() {
+                s.volume_percent = Some(new);
+            }
+            self.remote_call(move |s| async move { s.remote_volume(new, &id).await });
+        } else {
+            self.player.volume_step(delta);
+        }
+    }
+
+    /// Spawn a remote control call, forwarding any error to the status line.
+    fn remote_call<F, Fut>(&self, f: F)
+    where
+        F: FnOnce(Spotify) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = Result<()>> + Send,
+    {
+        let spotify = self.spotify.clone();
+        let tx = self.updates_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = f(spotify).await {
+                let _ = tx.send(Update::Error(e.to_string()));
+            }
+        });
+    }
+
+    // ---- Search history ----------------------------------------------------
+
+    fn history_reset(&mut self) {
+        self.history_pos = None;
+    }
+
+    /// Recall an older query (Up in the search box).
+    fn history_prev(&mut self) {
+        if self.search_history.is_empty() {
+            return;
+        }
+        let next = match self.history_pos {
+            None => self.search_history.len() - 1,
+            Some(0) => 0,
+            Some(i) => i - 1,
+        };
+        self.history_pos = Some(next);
+        self.search_input = self.search_history[next].clone();
+    }
+
+    /// Recall a newer query, or clear back to an empty box past the newest.
+    fn history_next(&mut self) {
+        let Some(i) = self.history_pos else { return };
+        if i + 1 < self.search_history.len() {
+            self.history_pos = Some(i + 1);
+            self.search_input = self.search_history[i + 1].clone();
+        } else {
+            self.history_pos = None;
+            self.search_input.clear();
+        }
+    }
+
+    /// Record a query into the rolling history (deduped, newest last, max 50).
+    fn record_history(&mut self, query: &str) {
+        let q = query.trim();
+        if q.is_empty() {
+            return;
+        }
+        self.search_history.retain(|h| h != q);
+        self.search_history.push(q.to_string());
+        let len = self.search_history.len();
+        if len > 50 {
+            self.search_history.drain(0..len - 50);
+        }
+    }
+
+    // ---- Type-to-filter ----------------------------------------------------
+
+    fn enter_filter(&mut self) {
+        if self.view == View::Search {
+            // In search view, `/` focuses the query box instead.
+            self.focus = Focus::Input;
+            return;
+        }
+        self.filter_query.clear();
+        self.rebuild_filter();
+        self.focus = Focus::Filter;
+        self.status = "Filter: (type to filter · Enter keep · Esc clear)".to_string();
+    }
+
+    fn handle_filter_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.filter_query.clear();
+                self.filter_map.clear();
+                self.focus = Focus::List;
+                self.status.clear();
+            }
+            KeyCode::Enter => {
+                // Keep the filter applied but return to list navigation.
+                self.focus = Focus::List;
+            }
+            KeyCode::Backspace => {
+                self.filter_query.pop();
+                self.rebuild_filter();
+            }
+            KeyCode::Char(c) => {
+                self.filter_query.push(c);
+                self.rebuild_filter();
+            }
+            _ => {}
+        }
+    }
+
+    /// Recompute `filter_map` from the active list for the current query and
+    /// reset the selection to the first match.
+    fn rebuild_filter(&mut self) {
+        let q = self.filter_query.to_lowercase();
+        let labels = self.filterable_labels();
+        self.filter_map = labels
+            .into_iter()
+            .enumerate()
+            .filter(|(_, label)| q.is_empty() || label.to_lowercase().contains(&q))
+            .map(|(i, _)| i)
+            .collect();
+        let sel = (!self.filter_map.is_empty()).then_some(0);
+        self.active_state().select(sel);
+    }
+
+    /// Whether a filter is currently constraining the active view.
+    pub fn filter_active(&self) -> bool {
+        self.focus == Focus::Filter || !self.filter_query.is_empty()
+    }
+
+    /// Searchable text for each row of the currently focused list.
+    fn filterable_labels(&self) -> Vec<String> {
+        match self.view {
+            View::Tracklist => self
+                .context_tracks
+                .iter()
+                .map(|t| format!("{} {}", t.name, t.artists))
+                .collect(),
+            View::Queue => self
+                .player
+                .queue
+                .iter()
+                .map(|t| format!("{} {}", t.name, t.artists))
+                .collect(),
+            View::Library => {
+                let mut v = vec!["Liked Songs".to_string()];
+                v.extend(self.playlists.iter().map(|p| p.name.clone()));
+                v
+            }
+            View::Devices => self.devices.iter().map(|d| d.name.clone()).collect(),
+            View::Search => Vec::new(),
+        }
+    }
+
+    /// Map a visible (possibly filtered) row index to the underlying item
+    /// index for the active view.
+    fn resolve_index(&self, visible: usize) -> Option<usize> {
+        if self.filter_active() && !matches!(self.view, View::Search) {
+            self.filter_map.get(visible).copied()
+        } else {
+            Some(visible)
+        }
+    }
+
+    // ---- Library writes (filled in by the library-writes feature) ----------
+
+    fn toggle_like_selection(&mut self) {
+        let Some(uri) = self.selected_or_current_track_uri() else {
+            self.status = "Nothing to like.".to_string();
+            return;
+        };
+        let Some(id) = uri.strip_prefix("spotify:track:").map(str::to_string) else {
+            self.status = "Only tracks can be liked.".to_string();
+            return;
+        };
+        let currently_liked = self.liked.contains(&uri);
+        // Optimistically flip local state; the task corrects on error.
+        if currently_liked {
+            self.liked.remove(&uri);
+        } else {
+            self.liked.insert(uri.clone());
+        }
+        self.status = if currently_liked {
+            "Removed from Liked Songs".to_string()
+        } else {
+            "Added to Liked Songs".to_string()
+        };
+        let spotify = self.spotify.clone();
+        let tx = self.updates_tx.clone();
+        tokio::spawn(async move {
+            let res = if currently_liked {
+                spotify.unlike_track(&id).await
+            } else {
+                spotify.like_track(&id).await
+            };
+            if let Err(e) = res {
+                let _ = tx.send(Update::Error(e.to_string()));
+            }
+        });
+    }
+
+    fn open_add_to_playlist(&mut self) {
+        let Some(uri) = self.selected_or_current_track_uri() else {
+            self.status = "Select a track to add first.".to_string();
+            return;
+        };
+        if self.playlists.is_empty() {
+            self.status = "No playlists loaded yet — open Library first.".to_string();
+            return;
+        }
+        let items: Vec<(String, String)> = self
+            .playlists
+            .iter()
+            .map(|p| (p.id.clone(), p.name.clone()))
+            .collect();
+        let mut state = ListState::default();
+        state.select(Some(0));
+        self.picker = Some(Picker {
+            title: "Add to playlist".to_string(),
+            state,
+            items,
+            track_uri: uri,
+        });
+    }
+
+    fn prompt_create_playlist(&mut self) {
+        self.prompt = Some(Prompt {
+            title: "New playlist name".to_string(),
+            input: String::new(),
+            kind: PromptKind::CreatePlaylist,
+        });
+    }
+
+    fn prompt_rename_playlist(&mut self) {
+        let Some(p) = self.selected_playlist() else {
+            self.status = "Select one of your playlists to rename.".to_string();
+            return;
+        };
+        self.prompt = Some(Prompt {
+            title: format!("Rename “{}”", p.name),
+            input: p.name.clone(),
+            kind: PromptKind::RenamePlaylist { id: p.id.clone() },
+        });
+    }
+
+    fn delete_selected_playlist(&mut self) {
+        let Some(p) = self.selected_playlist().cloned() else {
+            self.status = "Select one of your playlists to remove.".to_string();
+            return;
+        };
+        self.status = format!("Unfollowing “{}”…", p.name);
+        let spotify = self.spotify.clone();
+        let tx = self.updates_tx.clone();
+        tokio::spawn(async move {
+            match spotify.unfollow_playlist(&p.id).await {
+                Ok(()) => {
+                    if let Ok(pl) = spotify.user_playlists().await {
+                        let _ = tx.send(Update::Playlists(pl));
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(Update::Error(e.to_string()));
+                }
+            }
+        });
+    }
+
+    /// The currently selected library playlist (skips the Liked Songs row).
+    fn selected_playlist(&self) -> Option<&crate::model::PlaylistRef> {
+        if self.view != View::Library {
+            return None;
+        }
+        let visible = self.library_state.selected()?;
+        let idx = self.resolve_index(visible)?;
+        if idx == 0 {
+            None // Liked Songs row
+        } else {
+            self.playlists.get(idx - 1)
+        }
+    }
+
+    /// URI of the selected track in a track list/queue/search, else the
+    /// now-playing track. Used by like / add-to-playlist.
+    fn selected_or_current_track_uri(&self) -> Option<String> {
+        let from_list = match self.view {
+            View::Tracklist => self
+                .tracklist_state
+                .selected()
+                .and_then(|v| self.resolve_index(v))
+                .and_then(|i| self.context_tracks.get(i))
+                .map(|t| t.uri.clone()),
+            View::Queue => self
+                .queue_state
+                .selected()
+                .and_then(|v| self.resolve_index(v))
+                .and_then(|i| self.player.queue.get(i))
+                .map(|t| t.uri.clone()),
+            View::Search => match self.search_results.as_ref() {
+                Some(SearchResults::Tracks(tracks)) => self
+                    .search_state
+                    .selected()
+                    .and_then(|i| tracks.get(i))
+                    .map(|t| t.uri.clone()),
+                _ => None,
+            },
+            _ => None,
+        };
+        from_list.or_else(|| self.player.current_track().map(|t| t.uri.clone()))
+    }
+
+    // ---- Modal prompt + picker handling ------------------------------------
+
+    fn handle_prompt_key(&mut self, key: KeyEvent) {
+        let Some(prompt) = self.prompt.as_mut() else {
+            return;
+        };
+        match key.code {
+            KeyCode::Esc => self.prompt = None,
+            KeyCode::Backspace => {
+                prompt.input.pop();
+            }
+            KeyCode::Char(c) => prompt.input.push(c),
+            KeyCode::Enter => {
+                let prompt = self.prompt.take().unwrap();
+                let name = prompt.input.trim().to_string();
+                if name.is_empty() {
+                    return;
+                }
+                match prompt.kind {
+                    PromptKind::CreatePlaylist => self.spawn_create_playlist(name),
+                    PromptKind::RenamePlaylist { id } => self.spawn_rename_playlist(id, name),
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Handle a key while the playlist picker overlay is open. Returns `true`
+    /// if the key was consumed.
+    fn handle_picker_key(&mut self, key: KeyEvent) -> bool {
+        let Some(picker) = self.picker.as_mut() else {
+            return false;
+        };
+        let len = picker.items.len();
+        match key.code {
+            KeyCode::Esc => self.picker = None,
+            KeyCode::Up | KeyCode::Char('k') => move_sel(&mut picker.state, len, -1),
+            KeyCode::Down | KeyCode::Char('j') => move_sel(&mut picker.state, len, 1),
+            KeyCode::Enter => {
+                let picker = self.picker.take().unwrap();
+                if let Some(i) = picker.state.selected() {
+                    if let Some((id, label)) = picker.items.get(i) {
+                        self.spawn_add_to_playlist(
+                            id.clone(),
+                            picker.track_uri.clone(),
+                            label.clone(),
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+        true
+    }
+
     fn on_track_changed(&mut self) {
         // Drop stale art so the UI shows a placeholder until the new cover loads.
         self.art = None;
         self.art_pending = None;
+        self.pixel_art = None;
+        self.pixel_pending = None;
         if let Some(i) = self.player.current {
             self.queue_state.select(Some(i));
+        }
+        // Refresh the ♥ indicator for the now-playing track.
+        if let Some(uri) = self.player.current_track().map(|t| t.uri.clone()) {
+            self.spawn_refresh_liked(vec![uri]);
         }
     }
 
@@ -405,6 +1296,7 @@ impl App {
         if query.is_empty() {
             return;
         }
+        self.record_history(&query);
         self.status = format!("Searching “{query}”…");
         let spotify = self.spotify.clone();
         let tx = self.updates_tx.clone();
@@ -490,6 +1382,97 @@ impl App {
         });
     }
 
+    fn spawn_open_show(&mut self, id: String, name: String) {
+        self.status = format!("Loading podcast “{name}”…");
+        let spotify = self.spotify.clone();
+        let tx = self.updates_tx.clone();
+        tokio::spawn(async move {
+            let msg = match spotify.show_episodes(&id).await {
+                Ok((title, tracks)) => Update::Tracks {
+                    title,
+                    tracks,
+                    mode: OpenMode::Show,
+                },
+                Err(e) => Update::Error(e.to_string()),
+            };
+            let _ = tx.send(msg);
+        });
+    }
+
+    fn spawn_create_playlist(&mut self, name: String) {
+        self.status = format!("Creating playlist “{name}”…");
+        let spotify = self.spotify.clone();
+        let tx = self.updates_tx.clone();
+        tokio::spawn(async move {
+            match spotify.create_playlist(&name).await {
+                Ok(()) => {
+                    if let Ok(pl) = spotify.user_playlists().await {
+                        let _ = tx.send(Update::Playlists(pl));
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(Update::Error(e.to_string()));
+                }
+            }
+        });
+    }
+
+    fn spawn_rename_playlist(&mut self, id: String, name: String) {
+        self.status = format!("Renaming to “{name}”…");
+        let spotify = self.spotify.clone();
+        let tx = self.updates_tx.clone();
+        tokio::spawn(async move {
+            match spotify.rename_playlist(&id, &name).await {
+                Ok(()) => {
+                    if let Ok(pl) = spotify.user_playlists().await {
+                        let _ = tx.send(Update::Playlists(pl));
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(Update::Error(e.to_string()));
+                }
+            }
+        });
+    }
+
+    fn spawn_add_to_playlist(&mut self, playlist_id: String, track_uri: String, label: String) {
+        self.status = format!("Adding to “{label}”…");
+        let spotify = self.spotify.clone();
+        let tx = self.updates_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = spotify.add_to_playlist(&playlist_id, &track_uri).await {
+                let _ = tx.send(Update::Error(e.to_string()));
+            }
+        });
+    }
+
+    /// Refresh which of the given tracks the user has saved, updating `liked`.
+    fn spawn_refresh_liked(&self, uris: Vec<String>) {
+        let ids: Vec<String> = uris
+            .iter()
+            .filter_map(|u| u.strip_prefix("spotify:track:").map(str::to_string))
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        let spotify = self.spotify.clone();
+        let tx = self.updates_tx.clone();
+        tokio::spawn(async move {
+            match spotify.tracks_saved(&ids).await {
+                Ok(flags) => {
+                    let liked: Vec<String> = ids
+                        .into_iter()
+                        .zip(flags)
+                        .filter(|(_, saved)| *saved)
+                        .map(|(id, _)| format!("spotify:track:{id}"))
+                        .collect();
+                    let _ = tx.send(Update::Liked(liked));
+                }
+                Err(e) => tracing::warn!("checking saved tracks failed: {e}"),
+            }
+        });
+    }
+
     fn cycle_search_kind(&mut self) {
         let idx = SearchKind::ALL.iter().position(|k| *k == self.search_kind).unwrap_or(0);
         self.search_kind = SearchKind::ALL[(idx + 1) % SearchKind::ALL.len()];
@@ -500,7 +1483,7 @@ impl App {
         if cols == 0 || rows == 0 {
             return;
         }
-        let Some(track) = self.player.current_track() else {
+        let Some(track) = self.displayed_track() else {
             return;
         };
         let Some(url) = track.album_art_url.clone() else {
@@ -508,6 +1491,31 @@ impl App {
         };
         let uri = track.uri.clone();
 
+        // Pixel-graphics path: fetch and decode once per track (the protocol
+        // resizes itself when the panel changes).
+        if self.image_picker.is_some() {
+            let have = self
+                .pixel_art
+                .as_ref()
+                .is_some_and(|p| p.track_uri == uri);
+            let pending = self.pixel_pending.as_deref() == Some(uri.as_str());
+            if have || pending {
+                return;
+            }
+            self.pixel_pending = Some(uri.clone());
+            let tx = self.updates_tx.clone();
+            tokio::spawn(async move {
+                match albumart::fetch_image(&url).await {
+                    Ok(image) => {
+                        let _ = tx.send(Update::ArtImage { track_uri: uri, image });
+                    }
+                    Err(e) => tracing::warn!("album art (image) failed: {e}"),
+                }
+            });
+            return;
+        }
+
+        // Half-block path.
         let have = self
             .art
             .as_ref()
@@ -552,7 +1560,12 @@ impl App {
                 self.context_tracks = tracks;
                 self.tracklist_state.select((count > 0).then_some(0));
                 self.view = View::Tracklist;
+                self.filter_query.clear();
                 self.status = format!("{} — {count} track(s)", self.context_title);
+                // Best-effort: learn which of these are already liked.
+                let uris: Vec<String> =
+                    self.context_tracks.iter().map(|t| t.uri.clone()).collect();
+                self.spawn_refresh_liked(uris);
                 if mode == OpenMode::Play && count > 0 {
                     let tracks = self.context_tracks.clone();
                     self.player.play_tracks(tracks, 0);
@@ -561,16 +1574,57 @@ impl App {
             }
             Update::AlbumArt { track_uri, cols, rows, lines } => {
                 // Ignore art that arrived after the track moved on.
-                if self.player.current_track().map(|t| t.uri.as_str()) == Some(track_uri.as_str()) {
+                if self.displayed_track().map(|t| t.uri.as_str()) == Some(track_uri.as_str()) {
                     self.art = Some(AlbumArt { track_uri, cols, rows, lines });
                 }
                 self.art_pending = None;
+            }
+            Update::ArtImage { track_uri, image } => {
+                self.pixel_pending = None;
+                let still_current =
+                    self.displayed_track().map(|t| t.uri.as_str()) == Some(track_uri.as_str());
+                if let (true, Some(picker)) = (still_current, self.image_picker.as_ref()) {
+                    let protocol = picker.new_resize_protocol(image);
+                    self.pixel_art = Some(PixelArt { track_uri, protocol });
+                }
+            }
+            Update::Liked(uris) => {
+                self.liked.extend(uris);
+            }
+            Update::ConnectDevices(devs) => {
+                self.connect_devices = devs;
+                if self.view == View::Devices {
+                    self.refresh_devices();
+                }
+            }
+            Update::RemoteState(state) => {
+                if self.remote_active() {
+                    // If the server reports playback moved to a different
+                    // device than the one we selected, follow it.
+                    if let Some(s) = &state {
+                        if let Some(did) = &s.device_id {
+                            self.remote_device_id = Some(did.clone());
+                        }
+                    }
+                    self.remote_state = state;
+                }
             }
             Update::Error(msg) => {
                 tracing::error!("{msg}");
                 self.status = format!("Error: {msg}");
             }
         }
+    }
+}
+
+/// Await an optional receiver. When the receiver is `None`, this future never
+/// resolves so the corresponding `select!` arm is effectively disabled.
+async fn recv_opt(
+    rx: &mut Option<UnboundedReceiver<crate::keys::Action>>,
+) -> Option<crate::keys::Action> {
+    match rx {
+        Some(rx) => rx.recv().await,
+        None => std::future::pending().await,
     }
 }
 
@@ -590,6 +1644,8 @@ fn search_len(results: &SearchResults) -> usize {
         SearchResults::Albums(v) => v.len(),
         SearchResults::Artists(v) => v.len(),
         SearchResults::Playlists(v) => v.len(),
+        SearchResults::Episodes(v) => v.len(),
+        SearchResults::Shows(v) => v.len(),
     }
 }
 
