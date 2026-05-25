@@ -1,8 +1,6 @@
 //! Plain domain types decoupled from rspotify's models, so the UI and player
 //! never depend on the web-API crate's shapes directly.
 
-use rspotify::model::{FullEpisode, FullTrack, Image, PlayableItem};
-use rspotify::prelude::Id;
 use serde::{Deserialize, Serialize};
 
 /// Whether a playable item is a music track or a podcast/audiobook episode.
@@ -35,39 +33,6 @@ fn default_kind() -> PlayableKind {
 }
 
 impl Track {
-    pub fn from_full(t: FullTrack) -> Option<Self> {
-        let uri = t.id.as_ref()?.uri();
-        Some(Self {
-            uri,
-            name: t.name,
-            artists: join_artists(t.artists.iter().map(|a| a.name.as_str())),
-            album: t.album.name.clone(),
-            album_art_url: best_image(&t.album.images),
-            duration_ms: t.duration.num_milliseconds().max(0) as u32,
-            kind: PlayableKind::Track,
-        })
-    }
-
-    /// Build a playable from a podcast/audiobook episode.
-    pub fn from_episode(e: FullEpisode) -> Self {
-        Self {
-            uri: e.id.uri(),
-            name: e.name,
-            artists: e.show.name.clone(),
-            album: e.show.publisher.clone(),
-            album_art_url: best_image(&e.images).or_else(|| best_image(&e.show.images)),
-            duration_ms: e.duration.num_milliseconds().max(0) as u32,
-            kind: PlayableKind::Episode,
-        }
-    }
-
-    pub fn from_playable(item: PlayableItem) -> Option<Self> {
-        match item {
-            PlayableItem::Track(t) => Track::from_full(t),
-            PlayableItem::Episode(e) => Some(Track::from_episode(e)),
-        }
-    }
-
     pub fn is_episode(&self) -> bool {
         self.kind == PlayableKind::Episode
     }
@@ -111,22 +76,6 @@ pub struct RemoteState {
     pub device_id: Option<String>,
     pub volume_percent: Option<u8>,
     pub shuffle: bool,
-}
-
-fn join_artists<'a>(names: impl Iterator<Item = &'a str>) -> String {
-    names.collect::<Vec<_>>().join(", ")
-}
-
-/// Pick the album image closest to ~300px wide — large enough for crisp
-/// half-block art without downloading the full-resolution cover.
-pub fn best_image(images: &[Image]) -> Option<String> {
-    images
-        .iter()
-        .min_by_key(|img| {
-            let w = img.width.unwrap_or(0) as i64;
-            (w - 300).abs()
-        })
-        .map(|img| img.url.clone())
 }
 
 /// Format milliseconds as `m:ss` (or `h:mm:ss` for long items).

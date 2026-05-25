@@ -14,6 +14,18 @@ use rspotify::{AuthCodePkceSpotify, Config as RspotifyConfig, Credentials, OAuth
 use crate::config::{self, Config};
 use crate::spotify::Spotify;
 
+/// Spotify's official desktop ("keymaster") client id. librespot streams audio
+/// via `login5`, which Spotify only authorises for its own client ids; a
+/// development-mode app id is refused (HTTP 400 on every audio load) since the
+/// 2026 API lockdown. Using the official client id is the standard librespot
+/// approach and also serves the Web API, so no developer app is required.
+const STREAMING_CLIENT_ID: &str = "65b708073fc0480ea92a077233ca87bd";
+
+/// The redirect URI registered for [`STREAMING_CLIENT_ID`]. Spotify requires an
+/// exact match, and only this loopback URI (librespot's default) is registered
+/// for the official client, so it is fixed rather than configurable.
+const REDIRECT_URI: &str = "http://127.0.0.1:5588/login";
+
 /// Scopes requested in the OAuth flow. Includes playback (`streaming`) which is
 /// required by librespot plus everything the web API endpoints need.
 const REQUESTED_SCOPES: &[&str] = &[
@@ -62,7 +74,7 @@ pub struct Auth {
 /// running the interactive browser flow exactly once.
 pub async fn authenticate(config: &Config) -> Result<Auth> {
     let cache = build_cache(config)?;
-    let client = build_web_client(config)?;
+    let client = build_web_client()?;
 
     let cached_web_token = client.read_token_cache(true).await.ok().flatten();
     let cached_lib_creds = cache.credentials();
@@ -74,7 +86,7 @@ pub async fn authenticate(config: &Config) -> Result<Auth> {
         }
         _ => {
             tracing::info!("No usable cached credentials; starting OAuth flow.");
-            let token = run_oauth(config).await?;
+            let token = run_oauth().await?;
             *client.token.lock().await.unwrap() = Some(web_token_from(&token));
             LibrespotCredentials::with_access_token(token.access_token)
         }
@@ -101,10 +113,10 @@ fn build_cache(config: &Config) -> Result<Cache> {
         .context("creating librespot cache")
 }
 
-fn build_web_client(config: &Config) -> Result<AuthCodePkceSpotify> {
-    let creds = Credentials::new_pkce(&config.client_id);
+fn build_web_client() -> Result<AuthCodePkceSpotify> {
+    let creds = Credentials::new_pkce(STREAMING_CLIENT_ID);
     let oauth = OAuth {
-        redirect_uri: config.redirect_uri.clone(),
+        redirect_uri: REDIRECT_URI.to_string(),
         scopes: WEB_API_SCOPES.iter().map(|s| s.to_string()).collect(),
         ..Default::default()
     };
@@ -142,9 +154,9 @@ struct OAuthTokenData {
 /// Run the blocking librespot OAuth helper on a blocking thread. It prints a
 /// "Browse to: <url>" line and spins up a one-shot loopback listener to catch
 /// the redirect, so the user just needs to open the URL and approve.
-async fn run_oauth(config: &Config) -> Result<OAuthTokenData> {
-    let client_id = config.client_id.clone();
-    let redirect_uri = config.redirect_uri.clone();
+async fn run_oauth() -> Result<OAuthTokenData> {
+    let client_id = STREAMING_CLIENT_ID.to_string();
+    let redirect_uri = REDIRECT_URI.to_string();
 
     println!("\n  SpoTUIfy needs to connect to your Spotify account.");
     println!("  A browser URL will be printed below — open it and approve access.\n");

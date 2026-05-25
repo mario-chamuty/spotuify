@@ -38,6 +38,11 @@ cpal = "0.15"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 
+# TLS: with both `ring` and `aws-lc-rs` in the graph, rustls 0.23 cannot pick a
+# crypto provider automatically, so we install one explicitly in `main`. Pull in
+# rustls directly to expose the `ring` provider.
+rustls = { version = "0.23", features = ["ring"] }
+
 # Config & misc
 chrono = "0.4"
 serde = { version = "1", features = ["derive"] }

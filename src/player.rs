@@ -90,10 +90,10 @@ pub struct Player {
 impl Player {
     /// Connect a librespot session and build the playback pipeline.
     pub async fn connect(config: &Config, credentials: Credentials, cache: Cache) -> Result<Self> {
-        let session_config = SessionConfig {
-            client_id: config.client_id.clone(),
-            ..Default::default()
-        };
+        // Use librespot's default (official desktop) client id. Spotify refuses
+        // to issue streaming/audio tokens for development-mode app ids, so a
+        // custom `client_id` here causes a 400 on every audio load.
+        let session_config = SessionConfig::default();
         let session = Session::new(session_config, Some(cache));
         session
             .connect(credentials, true)

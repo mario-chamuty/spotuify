@@ -1304,7 +1304,7 @@ impl App {
         tokio::spawn(async move {
             let msg = match spotify.search(&query, kind).await {
                 Ok(r) => Update::Search(r),
-                Err(e) => Update::Error(e.to_string()),
+                Err(e) => Update::Error(format!("{e:#}")),
             };
             let _ = tx.send(msg);
         });
@@ -1316,7 +1316,7 @@ impl App {
         tokio::spawn(async move {
             let msg = match spotify.user_playlists().await {
                 Ok(p) => Update::Playlists(p),
-                Err(e) => Update::Error(e.to_string()),
+                Err(e) => Update::Error(format!("{e:#}")),
             };
             let _ = tx.send(msg);
         });

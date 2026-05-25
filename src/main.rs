@@ -33,6 +33,13 @@ use crate::player::Player;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Both `ring` and `aws-lc-rs` end up in the dependency graph, so rustls 0.23
+    // can't auto-select a crypto provider and panics on first TLS use. Install
+    // one explicitly before any TLS (OAuth, playback session, web API) happens.
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .ok();
+
     let _guard = init_logging();
 
     // Config errors (missing client id, first-run template) are friendly and
