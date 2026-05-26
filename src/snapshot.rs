@@ -4,6 +4,9 @@
 //! publish snapshots everywhere, while the MPRIS service that consumes them is
 //! compiled only on Linux.
 
+// The fields are consumed by the MPRIS service, which is compiled only on
+// Linux; elsewhere the snapshot is still built and published but never read.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Debug, Clone, Default)]
 pub struct Snapshot {
     pub playing: bool,

@@ -13,18 +13,19 @@ media keys, a configurable theme/keymap, and colored album art (half-blocks or
 sixel/kitty pixels).
 
 ```
-┌ 1 Search · 2 Library · 3 Tracks · 4 Queue · 5 Output ──────────────────────┐
-│ Search results                          │ Now Playing                       │
-│ ▶ Midnight City — M83        (4:03)     │      ▄▄▄▄▄▄▄▄▄▄▄▄▄▄                 │
-│   Outro — M83                (2:43)     │      ████ album ███                │
-│   Reunion — M83              (3:43)     │      ████  art  ███                │
-│                                         │      ▀▀▀▀▀▀▀▀▀▀▀▀▀▀                 │
-│                                         │        Midnight City              │
-│                                         │              M83                  │
-├─────────────────────────────────────────┴───────────────────────────────────┤
-│ ▶ Playing   vol  70%   shuffle off   repeat off   ███████▒▒▒▒▒  1:48 / 4:03  │
-│ ? help   12 result(s)                                                         │
-└───────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│ 1 Search   2 Library   3 Tracks   4 Queue   5 Output                     │
+├─────────────────────────────────────┬────────────────────────────────────┤
+│ Search results                      │ Now Playing                        │
+│ > Midnight City - M83      4:03     │            ▄▄▄▄▄▄▄▄▄▄▄▄            │
+│   Outro - M83              2:43     │            ███ album ██            │
+│   Reunion - M83            3:43     │            ▀▀▀▀▀▀▀▀▀▀▀▀            │
+│                                     │           Midnight City            │
+│                                     │                M83                 │
+├─────────────────────────────────────┴────────────────────────────────────┤
+│ > Playing   vol 70%   shuffle off   repeat off   #######-----  1:48/4:03 │
+│ ? help                                                     12 result(s)  │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
 > **Requires Spotify Premium** (librespot only streams for Premium accounts).
