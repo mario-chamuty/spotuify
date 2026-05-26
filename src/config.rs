@@ -61,6 +61,28 @@ pub struct Config {
     /// Keybinding overrides (`[keys]` table): `action-name = "key"` or a list.
     #[serde(default)]
     pub keys: HashMap<String, KeyBinding>,
+
+    /// 10-band graphic equalizer (`[equalizer]` table).
+    #[serde(default)]
+    pub equalizer: EqConfig,
+}
+
+/// Persisted equalizer settings: on/off plus per-band gain in dB.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EqConfig {
+    pub enabled: bool,
+    /// Gain per band in dB (10 bands; clamped to ±12). Missing entries are 0.
+    pub gains_db: Vec<i32>,
+}
+
+impl Default for EqConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            gains_db: vec![0; 10],
+        }
+    }
 }
 
 /// How album art is drawn.
@@ -91,6 +113,7 @@ impl Default for Config {
             art_mode: ArtMode::Auto,
             theme: ThemeConfig::default(),
             keys: HashMap::new(),
+            equalizer: EqConfig::default(),
         }
     }
 }

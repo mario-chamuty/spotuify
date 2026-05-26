@@ -45,6 +45,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.prompt.is_some() {
         render_prompt(f, app, f.area());
     }
+    if app.eq_open {
+        render_equalizer(f, app, f.area());
+    }
     let _ = theme;
 }
 
@@ -443,6 +446,65 @@ fn render_picker(f: &mut Frame, app: &mut App, area: Rect) {
         .highlight_style(highlight(theme))
         .highlight_symbol("▶ ");
     f.render_stateful_widget(list, rect, &mut picker.state);
+}
+
+fn render_equalizer(f: &mut Frame, app: &App, area: Rect) {
+    use crate::eq::{BANDS, LABELS, MAX_DB};
+    let theme = app.theme;
+    let eq = app.player.eq();
+    let enabled = eq.enabled();
+
+    let rect = centered_rect(area, 52, BANDS as u16 + 2);
+    f.render_widget(Clear, rect);
+
+    let state = if enabled { "ON" } else { "OFF" };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.accent))
+        .title(format!(
+            " Equalizer [{state}] · ←→ band · ↑↓ ±dB · 0 reset · R flat · space · Esc "
+        ));
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+
+    let lines: Vec<Line> = (0..BANDS)
+        .map(|b| {
+            let gain = eq.gain(b);
+            let selected = b == app.eq_sel;
+            // 2·MAX_DB+1 cells with a centre marker; one cell per dB.
+            let bar: String = (-MAX_DB..=MAX_DB)
+                .map(|cell| {
+                    if cell == 0 {
+                        '│'
+                    } else if (cell > 0 && cell <= gain) || (cell < 0 && cell >= gain) {
+                        '█'
+                    } else {
+                        '·'
+                    }
+                })
+                .collect();
+            let label_style = if selected {
+                Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
+            } else if enabled {
+                Style::default()
+            } else {
+                Style::default().fg(theme.dim)
+            };
+            let bar_style = if !enabled {
+                Style::default().fg(theme.dim)
+            } else if selected {
+                Style::default().fg(theme.accent)
+            } else {
+                Style::default().fg(theme.like)
+            };
+            Line::from(vec![
+                Span::styled(format!("{:>3} {:>+3} ", LABELS[b], gain), label_style),
+                Span::styled(bar, bar_style),
+            ])
+        })
+        .collect();
+
+    f.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
 
 // ---- small helpers --------------------------------------------------------

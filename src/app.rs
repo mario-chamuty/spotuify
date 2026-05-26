@@ -137,6 +137,10 @@ pub struct App {
     /// Track URI the loaded `lyrics` belong to.
     lyrics_for: Option<String>,
     lyrics_pending: Option<String>,
+
+    // Equalizer overlay.
+    pub eq_open: bool,
+    pub eq_sel: usize,
 }
 
 /// A decoded album cover bound to a terminal pixel-graphics protocol.
@@ -233,6 +237,8 @@ impl App {
             lyrics: None,
             lyrics_for: None,
             lyrics_pending: None,
+            eq_open: false,
+            eq_sel: 0,
         };
         // Reflect a restored now-playing track in the queue selection.
         if let Some(i) = app.player.current {
@@ -358,6 +364,9 @@ impl App {
         }
 
         // Modal overlays capture keys before any keybinding resolution.
+        if self.eq_open {
+            return self.handle_eq_key(key);
+        }
         if self.picker.is_some() {
             self.handle_picker_key(key);
             return;
@@ -436,6 +445,7 @@ impl App {
                     "Lyrics off".to_string()
                 };
             }
+            Action::ToggleEqualizer => self.eq_open = !self.eq_open,
             Action::EnterFilter => self.enter_filter(),
             Action::CreatePlaylist => self.prompt_create_playlist(),
             Action::RenamePlaylist => self.prompt_rename_playlist(),
@@ -1255,6 +1265,35 @@ impl App {
             _ => None,
         };
         from_list.or_else(|| self.player.current_track().map(|t| t.uri.clone()))
+    }
+
+    // ---- Equalizer overlay -------------------------------------------------
+
+    fn handle_eq_key(&mut self, key: KeyEvent) {
+        let eq = self.player.eq();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('E') | KeyCode::Char('q') => self.eq_open = false,
+            KeyCode::Left | KeyCode::Char('h') => self.eq_sel = self.eq_sel.saturating_sub(1),
+            KeyCode::Right | KeyCode::Char('l') => {
+                self.eq_sel = (self.eq_sel + 1).min(crate::eq::BANDS - 1);
+            }
+            KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('+') | KeyCode::Char('=') => {
+                eq.adjust(self.eq_sel, 1);
+            }
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('-') | KeyCode::Char('_') => {
+                eq.adjust(self.eq_sel, -1);
+            }
+            KeyCode::Char('0') => eq.adjust(self.eq_sel, -eq.gain(self.eq_sel)),
+            KeyCode::Char('R') => eq.reset(),
+            KeyCode::Char(' ') | KeyCode::Char('t') => eq.toggle(),
+            _ => {}
+        }
+        // Mirror into config so the change survives a restart (also saved on quit).
+        self.config.equalizer.enabled = eq.enabled();
+        self.config.equalizer.gains_db = eq.gains();
+        if !self.eq_open {
+            let _ = self.config.save();
+        }
     }
 
     // ---- Modal prompt + picker handling ------------------------------------

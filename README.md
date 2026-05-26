@@ -87,8 +87,11 @@ All bindings are configurable via the `[keys]` table (see below). Defaults:
 | `s` · `r` | Toggle shuffle · cycle repeat (off→all→one) |
 | `L` · `a` | Like/unlike track · add track to a playlist |
 | `c` / `R` / `D` | Create / rename / remove a playlist (Library) |
-| `y` | Toggle the lyrics panel |
+| `y` · `E` | Toggle the lyrics panel · open the equalizer |
 | `?` · `q` / `Ctrl-C` | Help · quit |
+
+In the **equalizer** overlay: `←`/`→` select a band, `↑`/`↓` adjust its gain,
+`0` reset the band, `R` flatten all, `space` toggle EQ on/off, `Esc` close.
 
 ## Features
 
@@ -99,6 +102,8 @@ All bindings are configurable via the `[keys]` table (see below). Defaults:
 - **Queue** with shuffle and repeat (off/all/one).
 - **Time-synced lyrics** (`y`) — scrolling, line-highlighted, with a plain-text
   fallback for unsynced lyrics.
+- **10-band graphic equalizer** (`E`) — peaking-filter EQ applied in the audio
+  path, adjustable live and persisted.
 - **Output selection** — pick a local audio device, or **transfer playback** to
   a Spotify Connect device (phone/speaker) and control it remotely.
 - **Podcasts** — search and play episodes alongside music.
@@ -132,6 +137,14 @@ dim = "140,140,140"       # secondary text and borders
 highlight_fg = "black"
 highlight_bg = "#1ed760"
 like = "#1ed760"
+```
+
+**Equalizer** — a 10-band graphic EQ (31 Hz–16 kHz, ±12 dB), saved here:
+
+```toml
+[equalizer]
+enabled = false
+gains_db = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]   # one per band, -12..=12
 ```
 
 **Keys** — map an action to one key or a list. Syntax: chars, `space`, `enter`,

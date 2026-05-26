@@ -6,6 +6,7 @@ mod app;
 mod audio;
 mod auth;
 mod config;
+mod eq;
 mod keys;
 mod lyrics;
 mod message;
