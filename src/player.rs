@@ -11,7 +11,7 @@ use std::time::Instant;
 use anyhow::{anyhow, Context, Result};
 use librespot::core::authentication::Credentials;
 use librespot::core::cache::Cache;
-use librespot::core::{Session, SessionConfig, SpotifyId};
+use librespot::core::{Session, SessionConfig, SpotifyUri};
 use librespot::playback::audio_backend;
 use librespot::playback::config::{AudioFormat, PlayerConfig};
 use librespot::playback::mixer::softmixer::SoftMixer;
@@ -80,7 +80,7 @@ pub struct Player {
 
     position_ms: u32,
     position_anchor: Instant,
-    current_id: Option<SpotifyId>,
+    current_id: Option<SpotifyUri>,
     /// Whether `current_id` has actually been loaded into librespot. A restored
     /// session sets `current` without loading, so the first play loads it.
     loaded: bool,
@@ -100,7 +100,9 @@ impl Player {
             .await
             .context("connecting to Spotify (is this a Premium account?)")?;
 
-        let mixer = Arc::new(SoftMixer::open(MixerConfig::default()));
+        let mixer = Arc::new(
+            SoftMixer::open(MixerConfig::default()).context("opening software mixer")?,
+        );
         let volume = config.volume_u16();
         mixer.set_volume(volume);
 
@@ -192,16 +194,16 @@ impl Player {
         let Some(track) = self.queue.get(index) else {
             return;
         };
-        let id = match SpotifyId::from_uri(&track.uri) {
-            Ok(id) => id,
+        let uri = match SpotifyUri::from_uri(&track.uri) {
+            Ok(uri) => uri,
             Err(e) => {
                 tracing::warn!("skipping unplayable uri {}: {e}", track.uri);
                 return;
             }
         };
         self.current = Some(index);
-        self.current_id = Some(id);
-        self.inner.load(id, true, 0);
+        self.current_id = Some(uri.clone());
+        self.inner.load(uri, true, 0);
         self.loaded = true;
         self.set_position(0);
         self.status = Status::Loading;
@@ -222,8 +224,8 @@ impl Player {
                 // A restored session hasn't loaded the track into librespot
                 // yet — load it at the saved position on the first play.
                 if !self.loaded {
-                    if let Some(id) = self.current_id {
-                        self.inner.load(id, true, self.position_ms);
+                    if let Some(uri) = self.current_id.clone() {
+                        self.inner.load(uri, true, self.position_ms);
                         self.loaded = true;
                         self.status = Status::Loading;
                         return;
@@ -339,7 +341,7 @@ impl Player {
         match current {
             Some(i) if i < self.queue.len() => {
                 self.current = Some(i);
-                self.current_id = SpotifyId::from_uri(&self.queue[i].uri).ok();
+                self.current_id = SpotifyUri::from_uri(&self.queue[i].uri).ok();
                 self.loaded = false;
                 self.status = Status::Paused;
                 self.position_ms = position_ms;
@@ -366,13 +368,13 @@ impl Player {
     pub fn set_output_device(&mut self, device: Option<String>) -> Result<()> {
         self.device = device;
         let resume_at = self.interpolated_position();
-        let resume = self.current_id;
+        let resume = self.current_id.clone();
         let was_playing = matches!(self.status, Status::Playing | Status::Loading);
 
         self.rebuild()?;
 
-        if let (Some(id), true) = (resume, was_playing) {
-            self.inner.load(id, true, resume_at);
+        if let (Some(uri), true) = (resume, was_playing) {
+            self.inner.load(uri, true, resume_at);
             self.set_position(resume_at);
             self.status = Status::Loading;
         }
@@ -404,13 +406,15 @@ impl Player {
             PlayerEvent::Loading { .. } => {
                 self.status = Status::Loading;
             }
-            PlayerEvent::EndOfTrack { track_id, .. } if self.current_id == Some(track_id) => {
+            PlayerEvent::EndOfTrack { track_id, .. }
+                if self.current_id.as_ref() == Some(&track_id) =>
+            {
                 self.next();
                 return true;
             }
             PlayerEvent::Unavailable { track_id, .. } => {
                 tracing::warn!("track unavailable: {track_id}");
-                if self.current_id == Some(track_id) {
+                if self.current_id.as_ref() == Some(&track_id) {
                     self.next();
                     return true;
                 }

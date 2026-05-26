@@ -26,13 +26,16 @@ rspotify = { version = "0.13", default-features = false, features = [
     "reqwest-rustls-tls",
 ] }
 
-# Local playback engine (open-source Spotify client) + OAuth helper
-librespot = { version = "0.6", default-features = false, features = [
+# Local playback engine (open-source Spotify client) + OAuth helper.
+# 0.8 requires an explicit TLS choice; use rustls to match the rest of the app.
+librespot = { version = "0.8", default-features = false, features = [
     "rodio-backend",
+    "rustls-tls-native-roots",
 ] }
 
-# Audio output device enumeration (for media output selection)
-cpal = "0.15"
+# Audio output device enumeration (for media output selection). Kept in lockstep
+# with librespot's rodio backend so device names match.
+cpal = "0.16"
 
 # Album art
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }

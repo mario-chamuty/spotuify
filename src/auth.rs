@@ -188,12 +188,17 @@ async fn run_oauth(
     let scopes: Vec<String> = scopes.iter().map(|s| s.to_string()).collect();
 
     println!("\n  {purpose}");
-    println!("  A browser URL will be printed below — open it and approve access.\n");
+    println!("  Your browser should open; if not, copy the URL printed below.\n");
 
     tokio::task::spawn_blocking(move || {
         let now = std::time::Instant::now();
         let scope_refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
-        let token = librespot::oauth::get_access_token(&client_id, &redirect_uri, scope_refs)
+        let client = librespot::oauth::OAuthClientBuilder::new(&client_id, &redirect_uri, scope_refs)
+            .open_in_browser()
+            .build()
+            .map_err(|e| anyhow::anyhow!("OAuth setup failed: {e}"))?;
+        let token = client
+            .get_access_token()
             .map_err(|e| anyhow::anyhow!("OAuth failed: {e}"))?;
         // Convert the `Instant`-based expiry into a plain duration from now.
         let expires_in = token.expires_at.saturating_duration_since(now);
