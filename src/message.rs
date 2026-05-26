@@ -42,5 +42,10 @@ pub enum Update {
     ConnectDevices(Vec<ConnectDevice>),
     /// A polled snapshot of remote (Connect) playback.
     RemoteState(Option<RemoteState>),
+    /// Fetched lyrics for a track (`None` = none available).
+    Lyrics {
+        track_uri: String,
+        lyrics: Option<crate::lyrics::Lyrics>,
+    },
     Error(String),
 }

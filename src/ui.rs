@@ -260,7 +260,15 @@ fn render_devices(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn render_now_playing(f: &mut Frame, app: &mut App, area: Rect) {
     let theme = app.theme;
-    let block = panel(theme, " Now Playing ");
+    let title = if app.show_lyrics {
+        match app.lyrics_or_status() {
+            Ok(l) if !l.provider.is_empty() => format!(" Lyrics · {} ", l.provider),
+            _ => " Lyrics ".to_string(),
+        }
+    } else {
+        " Now Playing ".to_string()
+    };
+    let block = panel(theme, title);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -276,15 +284,19 @@ fn render_now_playing(f: &mut Frame, app: &mut App, area: Rect) {
     let cols = (rows * 2).min(art_area.width);
     app.art_size = (cols, rows);
 
-    let art_drawn = crate::albumart::render_into(app, f, art_area, cols, rows);
-    if !art_drawn {
-        let placeholder = Paragraph::new(if app.player.current_track().is_some() {
-            "\n  ♪  loading cover…"
-        } else {
-            "\n  nothing playing"
-        })
-        .style(Style::default().fg(theme.dim));
-        f.render_widget(placeholder, art_area);
+    if app.show_lyrics {
+        render_lyrics(f, app, art_area);
+    } else {
+        let art_drawn = crate::albumart::render_into(app, f, art_area, cols, rows);
+        if !art_drawn {
+            let placeholder = Paragraph::new(if app.player.current_track().is_some() {
+                "\n  ♪  loading cover…"
+            } else {
+                "\n  nothing playing"
+            })
+            .style(Style::default().fg(theme.dim));
+            f.render_widget(placeholder, art_area);
+        }
     }
 
     let info = match app.displayed_track() {
@@ -304,6 +316,49 @@ fn render_now_playing(f: &mut Frame, app: &mut App, area: Rect) {
         None => Text::from(Line::from(Span::styled("—", Style::default().fg(theme.dim)))),
     };
     f.render_widget(Paragraph::new(info).alignment(Alignment::Center).wrap(Wrap { trim: true }), split[1]);
+}
+
+/// Render the lyrics panel. For synced lyrics the active line is highlighted and
+/// kept roughly centred; unsynced lyrics scroll from the top.
+fn render_lyrics(f: &mut Frame, app: &App, area: Rect) {
+    let theme = app.theme;
+    let lyrics = match app.lyrics_or_status() {
+        Ok(l) => l,
+        Err(msg) => {
+            let p = Paragraph::new(format!("\n  {msg}"))
+                .style(Style::default().fg(theme.dim))
+                .alignment(Alignment::Center);
+            f.render_widget(p, area);
+            return;
+        }
+    };
+
+    let height = area.height as usize;
+    let active = lyrics.active_line(app.playback_position());
+    // Keep the active line roughly centred; unsynced lyrics start at the top.
+    let start = active.map_or(0, |a| a.saturating_sub(height / 2));
+    let end = (start + height).min(lyrics.lines.len());
+
+    let rows: Vec<Line> = lyrics.lines[start..end]
+        .iter()
+        .enumerate()
+        .map(|(i, line)| {
+            let style = if Some(start + i) == active {
+                Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme.dim)
+            };
+            let text = if line.text.is_empty() { "♪" } else { line.text.as_str() };
+            Line::from(Span::styled(text.to_string(), style))
+        })
+        .collect();
+
+    f.render_widget(
+        Paragraph::new(Text::from(rows))
+            .alignment(Alignment::Center)
+            .wrap(Wrap { trim: true }),
+        area,
+    );
 }
 
 fn render_playback_bar(f: &mut Frame, app: &App, area: Rect) {

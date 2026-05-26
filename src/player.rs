@@ -164,6 +164,11 @@ impl Player {
         Ok(())
     }
 
+    /// A clone of the connected session (for metadata fetches like lyrics).
+    pub fn session(&self) -> Session {
+        self.session.clone()
+    }
+
     /// Take the stable event receiver (call once, from the app's run loop).
     pub fn take_events(&mut self) -> mpsc::UnboundedReceiver<PlayerEvent> {
         self.events_rx

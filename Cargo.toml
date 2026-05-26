@@ -60,8 +60,14 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 serde_json = "1.0.150"
-zbus = { version = "5.15.0", default-features = false, features = ["tokio"] }
 ratatui-image = "4"
+
+# MPRIS (D-Bus) media controls are a freedesktop/Linux feature.
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "5.15.0", default-features = false, features = ["tokio"] }
+
+# Unix-only: used to redirect the C audio libraries' stderr away from the TUI.
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [profile.release]

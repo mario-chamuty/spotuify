@@ -5,8 +5,9 @@
 
 use anyhow::{Context, Result};
 use librespot::core::cache::Cache;
-use librespot::core::{Session, SessionConfig, SpotifyUri};
+use librespot::core::{Session, SessionConfig, SpotifyId, SpotifyUri};
 use librespot::metadata::audio::AudioItem;
+use librespot::metadata::Lyrics;
 
 const TEST_URIS: &[&str] = &[
     "spotify:track:5YnMOGu7F9sn2ODpwDvpHP", // one that failed in the logs
@@ -33,7 +34,7 @@ async fn main() -> Result<()> {
 
     for uri_str in TEST_URIS {
         let uri = SpotifyUri::from_uri(uri_str).context("parse uri")?;
-        match AudioItem::get_file(&session, uri).await {
+        match AudioItem::get_file(&session, uri.clone()).await {
             Ok(item) => println!(
                 "\n{uri_str}\n  name        : {}\n  availability: {:?}\n  files       : {} format(s)\n  alternatives: {}",
                 item.name,
@@ -42,6 +43,17 @@ async fn main() -> Result<()> {
                 item.alternatives.as_ref().map_or(0, |a| a.len()),
             ),
             Err(e) => println!("\n{uri_str}\n  get_file ERROR: {e}"),
+        }
+        if let Ok(id) = SpotifyId::try_from(&uri) {
+            match Lyrics::get(&session, &id).await {
+                Ok(l) => println!(
+                    "  lyrics      : {} lines, sync={:?}, provider={}",
+                    l.lyrics.lines.len(),
+                    l.lyrics.sync_type,
+                    l.lyrics.provider_display_name
+                ),
+                Err(e) => println!("  lyrics      : none ({e})"),
+            }
         }
     }
     Ok(())

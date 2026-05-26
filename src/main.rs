@@ -7,11 +7,15 @@ mod audio;
 mod auth;
 mod config;
 mod keys;
+mod lyrics;
 mod message;
 mod model;
+// MPRIS is a freedesktop/Linux interface; only built there.
+#[cfg(target_os = "linux")]
 mod mpris;
 mod persist;
 mod player;
+mod snapshot;
 mod spotify;
 mod theme;
 mod ui;
@@ -65,8 +69,11 @@ async fn main() -> Result<()> {
     // MPRIS media controls: a control channel feeds Actions back into the app,
     // and a watch channel publishes a playback snapshot for property reads.
     let (control_tx, control_rx) = tokio::sync::mpsc::unbounded_channel();
-    let (snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(mpris::Snapshot::default());
+    let (snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(snapshot::Snapshot::default());
+    #[cfg(target_os = "linux")]
     mpris::spawn(control_tx, snapshot_rx);
+    #[cfg(not(target_os = "linux"))]
+    let _ = (control_tx, snapshot_rx); // MPRIS (media keys) is Linux-only
 
     // Detect terminal pixel-graphics support *before* entering raw mode, since
     // detection queries the terminal on stdout/stdin.
@@ -74,10 +81,10 @@ async fn main() -> Result<()> {
 
     // ALSA/JACK and other C audio libraries write diagnostics straight to fd 2,
     // which would scribble all over the alternate-screen TUI. Redirect stderr to
-    // a log file for the lifetime of the UI, then restore it.
-    let saved_stderr = config::cache_dir()
+    // a log file for the lifetime of the UI, then restore it (Unix only).
+    let stderr_guard = config::cache_dir()
         .ok()
-        .and_then(|dir| redirect_stderr(&dir.join("stderr.log")));
+        .map(|dir| stderr_log::redirect(&dir.join("stderr.log")));
 
     let mut terminal = setup_terminal().context("setting up terminal")?;
     install_panic_hook();
@@ -88,8 +95,8 @@ async fn main() -> Result<()> {
     let result = app.run(&mut terminal).await;
 
     restore_terminal(&mut terminal).ok();
-    if let Some(saved) = saved_stderr {
-        restore_stderr(saved);
+    if let Some(guard) = stderr_guard {
+        guard.restore();
     }
     if let Err(e) = result {
         eprintln!("SpoTUIfy exited with an error: {e:?}");
@@ -98,38 +105,66 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Point fd 2 (stderr) at `path`, returning the saved original fd so it can be
-/// restored later. C audio libraries log to fd 2 directly, bypassing Rust, so
-/// this is the only reliable way to keep their chatter off the TUI.
-fn redirect_stderr(path: &std::path::Path) -> Option<std::os::fd::RawFd> {
+/// Keeps the C audio libraries' stderr chatter off the alternate-screen TUI by
+/// pointing fd 2 at a log file for the UI's lifetime. Unix-only; a no-op
+/// elsewhere (Windows audio backends don't spew to stderr like ALSA does).
+#[cfg(unix)]
+mod stderr_log {
     use std::os::fd::AsRawFd;
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(path)
-        .ok()?;
-    // SAFETY: plain dup/dup2/close on valid fds; `file`'s fd stays alive until
-    // after dup2, after which fd 2 references the same open file description.
-    unsafe {
-        let saved = libc::dup(libc::STDERR_FILENO);
-        if saved < 0 {
-            return None;
+    use std::path::Path;
+
+    pub struct Guard(Option<std::os::fd::RawFd>);
+
+    pub fn redirect(path: &Path) -> Guard {
+        let Ok(file) = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(path)
+        else {
+            return Guard(None);
+        };
+        // SAFETY: plain dup/dup2/close on valid fds; `file`'s fd stays alive
+        // until after dup2, after which fd 2 references the same open file.
+        unsafe {
+            let saved = libc::dup(libc::STDERR_FILENO);
+            if saved < 0 {
+                return Guard(None);
+            }
+            if libc::dup2(file.as_raw_fd(), libc::STDERR_FILENO) < 0 {
+                libc::close(saved);
+                return Guard(None);
+            }
+            Guard(Some(saved))
         }
-        if libc::dup2(file.as_raw_fd(), libc::STDERR_FILENO) < 0 {
-            libc::close(saved);
-            return None;
+    }
+
+    impl Guard {
+        /// Restore the original stderr.
+        pub fn restore(self) {
+            if let Some(fd) = self.0 {
+                // SAFETY: `fd` is a valid dup of the original stderr.
+                unsafe {
+                    libc::dup2(fd, libc::STDERR_FILENO);
+                    libc::close(fd);
+                }
+            }
         }
-        Some(saved)
     }
 }
 
-/// Restore stderr from the fd saved by [`redirect_stderr`].
-fn restore_stderr(saved: std::os::fd::RawFd) {
-    // SAFETY: `saved` is a valid fd returned by `dup`; restore then close it.
-    unsafe {
-        libc::dup2(saved, libc::STDERR_FILENO);
-        libc::close(saved);
+#[cfg(not(unix))]
+mod stderr_log {
+    use std::path::Path;
+
+    pub struct Guard;
+
+    pub fn redirect(_path: &Path) -> Guard {
+        Guard
+    }
+
+    impl Guard {
+        pub fn restore(self) {}
     }
 }
 

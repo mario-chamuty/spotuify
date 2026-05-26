@@ -67,7 +67,7 @@ pub struct App {
 
     // External controls (MPRIS): incoming actions + outgoing playback snapshot.
     control_rx: Option<UnboundedReceiver<crate::keys::Action>>,
-    snapshot_tx: Option<tokio::sync::watch::Sender<crate::mpris::Snapshot>>,
+    snapshot_tx: Option<tokio::sync::watch::Sender<crate::snapshot::Snapshot>>,
 
     pub view: View,
     pub focus: Focus,
@@ -130,6 +130,13 @@ pub struct App {
     pub image_picker: Option<ratatui_image::picker::Picker>,
     pub pixel_art: Option<PixelArt>,
     pixel_pending: Option<String>,
+
+    // Lyrics. Shown in the Now Playing panel (in place of art) when toggled on.
+    pub show_lyrics: bool,
+    pub lyrics: Option<crate::lyrics::Lyrics>,
+    /// Track URI the loaded `lyrics` belong to.
+    lyrics_for: Option<String>,
+    lyrics_pending: Option<String>,
 }
 
 /// A decoded album cover bound to a terminal pixel-graphics protocol.
@@ -222,6 +229,10 @@ impl App {
             image_picker: None,
             pixel_art: None,
             pixel_pending: None,
+            show_lyrics: false,
+            lyrics: None,
+            lyrics_for: None,
+            lyrics_pending: None,
         };
         // Reflect a restored now-playing track in the queue selection.
         if let Some(i) = app.player.current {
@@ -240,7 +251,7 @@ impl App {
     pub fn attach_external_controls(
         &mut self,
         control_rx: UnboundedReceiver<crate::keys::Action>,
-        snapshot_tx: tokio::sync::watch::Sender<crate::mpris::Snapshot>,
+        snapshot_tx: tokio::sync::watch::Sender<crate::snapshot::Snapshot>,
     ) {
         self.control_rx = Some(control_rx);
         self.snapshot_tx = Some(snapshot_tx);
@@ -260,6 +271,7 @@ impl App {
         while !self.should_quit {
             terminal.draw(|f| ui::draw(f, self))?;
             self.maybe_request_art();
+            self.maybe_request_lyrics();
             self.publish_snapshot();
 
             tokio::select! {
@@ -310,7 +322,7 @@ impl App {
         let Some(tx) = &self.snapshot_tx else { return };
         let status = self.playback_status();
         let track = self.player.current_track();
-        let snap = crate::mpris::Snapshot {
+        let snap = crate::snapshot::Snapshot {
             playing: status == crate::player::Status::Playing,
             stopped: status == crate::player::Status::Stopped,
             has_track: track.is_some(),
@@ -416,6 +428,14 @@ impl App {
             Action::Enqueue => self.enqueue_selection(),
             Action::ToggleLike => self.toggle_like_selection(),
             Action::AddToPlaylist => self.open_add_to_playlist(),
+            Action::ToggleLyrics => {
+                self.show_lyrics = !self.show_lyrics;
+                self.status = if self.show_lyrics {
+                    "Lyrics on".to_string()
+                } else {
+                    "Lyrics off".to_string()
+                };
+            }
             Action::EnterFilter => self.enter_filter(),
             Action::CreatePlaylist => self.prompt_create_playlist(),
             Action::RenamePlaylist => self.prompt_rename_playlist(),
@@ -625,6 +645,24 @@ impl App {
             }
         }
         self.player.current_track()
+    }
+
+    /// Lyrics to render, or a status message ("Loading…" / "No lyrics…") for the
+    /// lyrics panel.
+    pub fn lyrics_or_status(&self) -> Result<&crate::lyrics::Lyrics, &'static str> {
+        match &self.lyrics {
+            Some(l) if !l.lines.is_empty() => Ok(l),
+            Some(_) => Err("No lyrics for this track."),
+            None if self.displayed_track().is_none() => Err("Nothing playing."),
+            None => {
+                let uri = self.displayed_track().map(|t| t.uri.as_str());
+                if self.lyrics_for.as_deref() == uri {
+                    Err("No lyrics for this track.")
+                } else {
+                    Err("Loading lyrics…")
+                }
+            }
+        }
     }
 
     /// Volume percentage to display (remote device volume in remote mode).
@@ -1280,6 +1318,9 @@ impl App {
         self.art_pending = None;
         self.pixel_art = None;
         self.pixel_pending = None;
+        self.lyrics = None;
+        self.lyrics_for = None;
+        self.lyrics_pending = None;
         if let Some(i) = self.player.current {
             self.queue_state.select(Some(i));
         }
@@ -1537,6 +1578,29 @@ impl App {
         });
     }
 
+    /// Fetch lyrics for the now-playing track when the lyrics panel is shown
+    /// and they aren't already loaded/loading for it.
+    fn maybe_request_lyrics(&mut self) {
+        if !self.show_lyrics {
+            return;
+        }
+        let Some(uri) = self.displayed_track().map(|t| t.uri.clone()) else {
+            return;
+        };
+        let loaded = self.lyrics_for.as_deref() == Some(uri.as_str());
+        let pending = self.lyrics_pending.as_deref() == Some(uri.as_str());
+        if loaded || pending {
+            return;
+        }
+        self.lyrics_pending = Some(uri.clone());
+        let session = self.player.session();
+        let tx = self.updates_tx.clone();
+        tokio::spawn(async move {
+            let lyrics = crate::lyrics::fetch(&session, &uri).await.ok();
+            let _ = tx.send(Update::Lyrics { track_uri: uri, lyrics });
+        });
+    }
+
     // ---- Updates -----------------------------------------------------------
 
     fn handle_update(&mut self, update: Update) {
@@ -1607,6 +1671,14 @@ impl App {
                         }
                     }
                     self.remote_state = state;
+                }
+            }
+            Update::Lyrics { track_uri, lyrics } => {
+                self.lyrics_pending = None;
+                // Ignore lyrics that arrived after the track moved on.
+                if self.displayed_track().map(|t| t.uri.as_str()) == Some(track_uri.as_str()) {
+                    self.lyrics = lyrics;
+                    self.lyrics_for = Some(track_uri);
                 }
             }
             Update::Error(msg) => {

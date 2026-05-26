@@ -49,6 +49,7 @@ pub enum Action {
     CreatePlaylist,
     RenamePlaylist,
     DeletePlaylist,
+    ToggleLyrics,
 }
 
 impl Action {
@@ -85,6 +86,7 @@ impl Action {
             Action::CreatePlaylist => "create-playlist",
             Action::RenamePlaylist => "rename-playlist",
             Action::DeletePlaylist => "delete-playlist",
+            Action::ToggleLyrics => "toggle-lyrics",
         }
     }
 
@@ -126,6 +128,7 @@ const ALL_ACTIONS: &[Action] = &[
     Action::CreatePlaylist,
     Action::RenamePlaylist,
     Action::DeletePlaylist,
+    Action::ToggleLyrics,
 ];
 
 /// Compiled-in default chords for each action, as parseable strings.
@@ -161,6 +164,7 @@ fn default_bindings() -> Vec<(Action, &'static [&'static str])> {
         (Action::CreatePlaylist, &["c"]),
         (Action::RenamePlaylist, &["R"]),
         (Action::DeletePlaylist, &["D"]),
+        (Action::ToggleLyrics, &["y"]),
     ]
 }
 
