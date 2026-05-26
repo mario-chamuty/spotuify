@@ -32,11 +32,26 @@ sixel/kitty pixels) — all from the keyboard.
 
 ## Setup
 
-No Spotify developer app or API credentials are required — SpoTUIfy logs in
-through Spotify's official client (the standard librespot approach), so there is
-nothing to register.
+SpoTUIfy uses **two** Spotify logins, for two different jobs:
 
-### 1. Build
+- **Playback** streams through Spotify's official client (the standard librespot
+  approach) — nothing to register.
+- **Search & your library** use the Web API. Spotify's 2026 changes rate-limit
+  the official client id on the Web API (it's shared by every librespot user),
+  so these features need your **own** free Spotify app.
+
+### 1. Register a Spotify app (for search/library)
+
+1. Go to the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
+   and create an app (any name).
+2. Add this **exact** Redirect URI to it:
+
+   ```
+   http://127.0.0.1:8888/callback
+   ```
+3. Copy the app's **Client ID**.
+
+### 2. Build
 
 ```sh
 cargo build --release
@@ -44,23 +59,13 @@ cargo build --release
 
 The binary lands at `target/release/spotuify`.
 
-### 2. Run
+### 3. Configure
 
-```sh
-./target/release/spotuify
-```
-
-On first launch it prints a `Browse to: <url>` line. Open that URL, log in and
-approve access; you'll be redirected back to a local listener automatically — no
-copy/paste needed. Credentials are cached under `~/.cache/spotuify/`, so
-subsequent launches skip the browser.
-
-### Configuration (optional)
-
-SpoTUIfy runs with no configuration. A commented template is written to
-`~/.config/spotuify/config.toml` on first launch; edit it to taste:
+Run it once to generate `~/.config/spotuify/config.toml`, then set `client_id`:
 
 ```toml
+client_id = "your-app-client-id"          # from step 1 (search/library)
+redirect_uri = "http://127.0.0.1:8888/callback"   # must match the app exactly
 audio_backend = "rodio"
 # audio_device = "..."   # optional; pick from the Output tab instead
 volume = 70
@@ -71,6 +76,22 @@ art_mode = "auto"        # auto | halfblocks | sixel | kitty
 # [theme]   # colour overrides — see Configuration reference
 # [keys]    # keybinding overrides — see Keybindings
 ```
+
+### 4. Run
+
+```sh
+./target/release/spotuify
+```
+
+On the **first** launch it prints a `Browse to: <url>` line up to **twice** —
+once to authorise playback (official client) and once for your app (search /
+library). Open each URL and approve; you're redirected back to a local listener
+automatically. Both tokens are cached under `~/.cache/spotuify/`, so later
+launches skip the browser entirely.
+
+> If the Web API login fails with a redirect-URI error, make sure the
+> `redirect_uri` in your config is registered **exactly** in your Spotify app
+> (including the port).
 
 ## Keybindings
 
@@ -152,6 +173,8 @@ keeps working.
 
 | Key | Meaning |
 | --- | --- |
+| `client_id` | Your Spotify app Client ID, used for the Web API (search/library/playback control). Playback itself needs no app. |
+| `redirect_uri` | OAuth redirect for `client_id`; must match the app's registered URI exactly (loopback HTTP with a port). |
 | `audio_backend` | librespot backend. `rodio` (default) works via cpal on ALSA/Pulse. |
 | `audio_device` | Output device name. Leave unset for the system default; the Output tab edits this. |
 | `volume` | Startup volume, 0–100. |

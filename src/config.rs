@@ -19,6 +19,18 @@ const APP_DIR: &str = "spotuify";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    /// Spotify app **client id** for the Web API (search, playlists, library,
+    /// playback control). Register a free app at
+    /// <https://developer.spotify.com/dashboard> and add `redirect_uri` to it.
+    /// Audio *playback* uses Spotify's official client and needs no app — this is
+    /// only required for catalog and library features, because Spotify's 2026
+    /// changes rate-limit the official client id on the Web API.
+    pub client_id: String,
+
+    /// OAuth redirect URI registered for `client_id`. Must be a loopback HTTP
+    /// address with a port and match the app's settings exactly.
+    pub redirect_uri: String,
+
     /// librespot audio backend. "rodio" works everywhere via cpal.
     pub audio_backend: String,
 
@@ -69,6 +81,8 @@ pub enum ArtMode {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            client_id: String::new(),
+            redirect_uri: "http://127.0.0.1:8888/callback".to_string(),
             audio_backend: "rodio".to_string(),
             audio_device: None,
             volume: 70,
@@ -119,10 +133,15 @@ impl Config {
         let header = "\
 # SpoTUIfy configuration
 #
-# Everything here is optional — SpoTUIfy runs with no configuration and logs in
-# through Spotify's official client (a developer app is NOT required). A Spotify
-# Premium account is required for playback. Edit the values below to taste; see
-# the README for the [theme] and [keys] tables.
+# Audio PLAYBACK uses Spotify's official client and needs no developer app.
+# Search and your LIBRARY use the Web API, which Spotify's 2026 changes
+# rate-limit on the official client id — so for those you must register a free
+# app and set `client_id` below:
+#   1. https://developer.spotify.com/dashboard  ->  Create app
+#   2. Add this Redirect URI to it:  http://127.0.0.1:8888/callback
+#   3. Copy the app's Client ID into `client_id`.
+# A Spotify Premium account is required for playback. See the README for the
+# [theme] and [keys] tables.
 
 ";
         let body = toml::to_string_pretty(self)?;
@@ -136,7 +155,7 @@ impl Config {
     }
 }
 
-fn config_path() -> Result<PathBuf> {
+pub fn config_path() -> Result<PathBuf> {
     let dir = dirs::config_dir().context("could not determine config directory")?;
     Ok(dir.join(APP_DIR).join("config.toml"))
 }
@@ -157,9 +176,12 @@ pub fn librespot_cache_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
-/// File where the rspotify web-API OAuth token is cached.
+/// File where the rspotify web-API OAuth token is cached. The `-userapp` suffix
+/// distinguishes tokens minted by the user's own Web API app from the older
+/// official-client tokens, so upgrading forces a one-time Web API re-login
+/// instead of silently reusing a rate-limited official-client token.
 pub fn web_token_path() -> Result<PathBuf> {
-    Ok(cache_dir()?.join("web-token.json"))
+    Ok(cache_dir()?.join("web-token-userapp.json"))
 }
 
 /// File the TUI logs to (the terminal is owned by the UI).
