@@ -4181,6 +4181,7 @@ dependencies = [
  "dirs",
  "futures",
  "image",
+ "libc",
  "librespot",
  "open",
  "ratatui",

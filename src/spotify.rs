@@ -204,28 +204,31 @@ impl Spotify {
             .await
     }
 
-    /// Send a request, retrying once on HTTP 429 after the server's
-    /// `Retry-After` delay (capped at 8s). Spotify rate-limits aggressively, so
-    /// brief limits self-heal instead of surfacing as errors.
+    /// Send a request, retrying on HTTP 429 after the server's `Retry-After`
+    /// delay (falling back to exponential backoff). The official client id is
+    /// shared across many librespot apps and rate-limited aggressively, so brief
+    /// limits self-heal instead of surfacing as errors. These calls run in
+    /// background tasks, so a few seconds of backoff doesn't block the UI.
     async fn send_with_retry(
         &self,
         build: impl Fn() -> reqwest::RequestBuilder,
     ) -> Result<serde_json::Value> {
-        const MAX_RETRIES: u32 = 1;
+        const MAX_RETRIES: u32 = 4;
         let mut attempt = 0;
         loop {
             let resp = build().send().await.context("HTTP request failed")?;
             if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS && attempt < MAX_RETRIES {
+                // Honor Retry-After when present; otherwise back off 1,2,4,8s.
                 let wait = resp
                     .headers()
                     .get(reqwest::header::RETRY_AFTER)
                     .and_then(|h| h.to_str().ok())
                     .and_then(|s| s.parse::<u64>().ok())
-                    .unwrap_or(2)
-                    .min(8);
-                tracing::warn!("rate limited (429); retrying after {wait}s");
-                tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+                    .unwrap_or(1u64 << attempt)
+                    .clamp(1, 15);
                 attempt += 1;
+                tracing::warn!("rate limited (429); retry {attempt}/{MAX_RETRIES} after {wait}s");
+                tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
                 continue;
             }
             return json_or_err(resp).await;

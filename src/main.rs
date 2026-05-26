@@ -72,6 +72,13 @@ async fn main() -> Result<()> {
     // detection queries the terminal on stdout/stdin.
     let picker = setup_picker(config.art_mode);
 
+    // ALSA/JACK and other C audio libraries write diagnostics straight to fd 2,
+    // which would scribble all over the alternate-screen TUI. Redirect stderr to
+    // a log file for the lifetime of the UI, then restore it.
+    let saved_stderr = config::cache_dir()
+        .ok()
+        .and_then(|dir| redirect_stderr(&dir.join("stderr.log")));
+
     let mut terminal = setup_terminal().context("setting up terminal")?;
     install_panic_hook();
 
@@ -81,11 +88,49 @@ async fn main() -> Result<()> {
     let result = app.run(&mut terminal).await;
 
     restore_terminal(&mut terminal).ok();
+    if let Some(saved) = saved_stderr {
+        restore_stderr(saved);
+    }
     if let Err(e) = result {
         eprintln!("SpoTUIfy exited with an error: {e:?}");
         std::process::exit(1);
     }
     Ok(())
+}
+
+/// Point fd 2 (stderr) at `path`, returning the saved original fd so it can be
+/// restored later. C audio libraries log to fd 2 directly, bypassing Rust, so
+/// this is the only reliable way to keep their chatter off the TUI.
+fn redirect_stderr(path: &std::path::Path) -> Option<std::os::fd::RawFd> {
+    use std::os::fd::AsRawFd;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(path)
+        .ok()?;
+    // SAFETY: plain dup/dup2/close on valid fds; `file`'s fd stays alive until
+    // after dup2, after which fd 2 references the same open file description.
+    unsafe {
+        let saved = libc::dup(libc::STDERR_FILENO);
+        if saved < 0 {
+            return None;
+        }
+        if libc::dup2(file.as_raw_fd(), libc::STDERR_FILENO) < 0 {
+            libc::close(saved);
+            return None;
+        }
+        Some(saved)
+    }
+}
+
+/// Restore stderr from the fd saved by [`redirect_stderr`].
+fn restore_stderr(saved: std::os::fd::RawFd) {
+    // SAFETY: `saved` is a valid fd returned by `dup`; restore then close it.
+    unsafe {
+        libc::dup2(saved, libc::STDERR_FILENO);
+        libc::close(saved);
+    }
 }
 
 /// Build a pixel-graphics `Picker` per the configured `art_mode`. Returns
