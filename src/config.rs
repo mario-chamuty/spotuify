@@ -19,15 +19,6 @@ const APP_DIR: &str = "spotuify";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
-    /// Spotify application client id. Register a free app at
-    /// <https://developer.spotify.com/dashboard> and add `redirect_uri` to its
-    /// allowed Redirect URIs.
-    pub client_id: String,
-
-    /// OAuth redirect URI. Must be a loopback HTTP address with a port and must
-    /// match exactly what is registered for the app above.
-    pub redirect_uri: String,
-
     /// librespot audio backend. "rodio" works everywhere via cpal.
     pub audio_backend: String,
 
@@ -78,8 +69,6 @@ pub enum ArtMode {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            client_id: String::new(),
-            redirect_uri: "http://127.0.0.1:8888/callback".to_string(),
             audio_backend: "rodio".to_string(),
             audio_device: None,
             volume: 70,
@@ -93,30 +82,20 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Load the config from disk, creating a commented template on first run.
+    /// Load the config from disk. On first run a commented template is written
+    /// for reference and the defaults are used — no configuration is required to
+    /// run (authentication uses Spotify's official client id).
     pub fn load() -> Result<Self> {
         let path = config_path()?;
         if !path.exists() {
             let cfg = Config::default();
             cfg.write_template(&path)?;
-            anyhow::bail!(
-                "No config found. A template was written to {}.\n\
-                 Edit it and set `client_id` (register an app at \
-                 https://developer.spotify.com/dashboard with redirect URI {}).",
-                path.display(),
-                cfg.redirect_uri
-            );
+            return Ok(cfg);
         }
         let text = std::fs::read_to_string(&path)
             .with_context(|| format!("reading config at {}", path.display()))?;
         let cfg: Config = toml::from_str(&text)
             .with_context(|| format!("parsing config at {}", path.display()))?;
-        if cfg.client_id.trim().is_empty() {
-            anyhow::bail!(
-                "`client_id` is empty in {}. Set it to your Spotify app's client id.",
-                path.display()
-            );
-        }
         Ok(cfg)
     }
 
@@ -140,10 +119,10 @@ impl Config {
         let header = "\
 # SpoTUIfy configuration
 #
-# 1. Create a Spotify app: https://developer.spotify.com/dashboard
-# 2. Add this exact Redirect URI to the app settings: http://127.0.0.1:8888/callback
-# 3. Copy the app's Client ID into `client_id` below.
-# A Spotify Premium account is required for playback.
+# Everything here is optional — SpoTUIfy runs with no configuration and logs in
+# through Spotify's official client (a developer app is NOT required). A Spotify
+# Premium account is required for playback. Edit the values below to taste; see
+# the README for the [theme] and [keys] tables.
 
 ";
         let body = toml::to_string_pretty(self)?;
