@@ -31,6 +31,14 @@ pub struct Config {
     /// address with a port and match the app's settings exactly.
     pub redirect_uri: String,
 
+    /// `sp_dc` cookie from a logged-in Spotify web session, used to mint a
+    /// web-player token for the real **Home** tab (Daily Mix 1–6, Discover
+    /// Weekly, Release Radar, genre/mood shelves) via Spotify's private Home
+    /// GraphQL. Normally left empty: [`crate::cookie`] auto-detects it from a
+    /// local browser profile. Set it only to override auto-detection.
+    #[serde(default)]
+    pub sp_dc: String,
+
     /// librespot audio backend. "rodio" works everywhere via cpal.
     pub audio_backend: String,
 
@@ -105,6 +113,7 @@ impl Default for Config {
         Self {
             client_id: String::new(),
             redirect_uri: "http://127.0.0.1:8888/callback".to_string(),
+            sp_dc: String::new(),
             audio_backend: "rodio".to_string(),
             audio_device: None,
             volume: 70,
@@ -163,6 +172,14 @@ impl Config {
 #   1. https://developer.spotify.com/dashboard  ->  Create app
 #   2. Add this Redirect URI to it:  http://127.0.0.1:8888/callback
 #   3. Copy the app's Client ID into `client_id`.
+#
+# The *real* Home tab — Daily Mix 1-6, Discover Weekly, Release Radar and
+# genre/mood shelves — works automatically when you're logged into Spotify in a
+# local browser: SpoTUIfy auto-detects your `sp_dc` session cookie. Only set
+# `sp_dc` below to override that (e.g. if no logged-in browser was found): get
+# it from DevTools -> Application -> Cookies -> https://open.spotify.com. With
+# no cookie at all, Home shows stable fallback shelves.
+#
 # A Spotify Premium account is required for playback. See the README for the
 # [theme] and [keys] tables.
 

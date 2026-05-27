@@ -652,11 +652,11 @@ fn render_equalizer(f: &mut Frame, app: &App, area: Rect) {
 
 fn render_home(f: &mut Frame, app: &App, area: Rect) {
     let theme = app.theme;
-    let block = panel(theme, " Home · ↑↓ select · Enter play/open ");
+    let block = panel(theme, " Home · ↑↓ shelves · ←→ cards · Enter play/open ");
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let Some(home) = &app.home else {
+    if app.home.is_none() {
         let txt = if app.home_loading {
             "\n  Loading your Home…"
         } else {
@@ -664,94 +664,126 @@ fn render_home(f: &mut Frame, app: &App, area: Rect) {
         };
         f.render_widget(Paragraph::new(txt).style(Style::default().fg(theme.dim)), inner);
         return;
-    };
-
-    let accent = Style::default().fg(theme.accent).add_modifier(Modifier::BOLD);
-    let mut lines: Vec<Line> = Vec::new();
-    let mut i = 0usize; // running selectable index
-    let mut sel_line = 0usize;
-    let sel = app.home_sel;
-
-    let section = |lines: &mut Vec<Line>, title: &str| {
-        if !lines.is_empty() {
-            lines.push(Line::from(""));
-        }
-        lines.push(Line::from(Span::styled(format!(" {title}"), accent)));
-    };
-
-    if !home.recently.is_empty() {
-        section(&mut lines, "Recently played");
-        for t in &home.recently {
-            if i == sel {
-                sel_line = lines.len();
-            }
-            lines.push(home_track_line(theme, i == sel, &t.name, &t.artists));
-            i += 1;
-        }
-    }
-    if !home.top_tracks.is_empty() {
-        section(&mut lines, "Your top tracks");
-        for t in &home.top_tracks {
-            if i == sel {
-                sel_line = lines.len();
-            }
-            lines.push(home_track_line(theme, i == sel, &t.name, &t.artists));
-            i += 1;
-        }
-    }
-    if !home.top_artists.is_empty() {
-        section(&mut lines, "Your top artists");
-        for a in &home.top_artists {
-            if i == sel {
-                sel_line = lines.len();
-            }
-            lines.push(home_simple_line(theme, i == sel, &a.name));
-            i += 1;
-        }
-    }
-    if !home.mixes.is_empty() {
-        section(&mut lines, "Made for you");
-        for m in &home.mixes {
-            if i == sel {
-                sel_line = lines.len();
-            }
-            lines.push(home_simple_line(theme, i == sel, &m.label));
-            i += 1;
-        }
-    }
-    if i == 0 {
-        lines.push(Line::from(Span::styled(
-            "  Nothing to show — try playing some music first.",
-            Style::default().fg(theme.dim),
-        )));
     }
 
-    // Scroll so the selected row stays roughly centred.
+    let shelves = app.home_shelves();
+    if shelves.is_empty() {
+        f.render_widget(
+            Paragraph::new("\n  Nothing to show — try playing some music first.")
+                .style(Style::default().fg(theme.dim)),
+            inner,
+        );
+        return;
+    }
+
+    let (lines, sel_top) = home_grid_lines(&shelves, app.home_sel, theme, inner.width as usize);
+
+    // Vertical scroll: keep the whole selected shelf block (title + 4 lines) in
+    // view.
     let h = inner.height as usize;
     let max_scroll = lines.len().saturating_sub(h);
-    let scroll = sel_line.saturating_sub(h / 2).min(max_scroll) as u16;
+    let scroll = (sel_top + 5).saturating_sub(h).min(max_scroll) as u16;
     f.render_widget(Paragraph::new(Text::from(lines)).scroll((scroll, 0)), inner);
 }
 
-fn home_track_line(theme: Theme, selected: bool, name: &str, artists: &str) -> Line<'static> {
-    let (marker, style) = if selected {
-        ("▶ ", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))
-    } else {
-        ("  ", Style::default())
-    };
-    Line::from(vec![
-        Span::styled(format!("  {marker}{name}"), style),
-        Span::styled(format!("  —  {artists}"), Style::default().fg(theme.dim)),
-    ])
+/// Build the Home grid as styled lines: each shelf is a title followed by a row
+/// of bordered cards. Returns the lines and the first line of the selected
+/// shelf's block (for vertical scrolling). Pure, so it can be unit-tested and
+/// reused by the `--home-probe` diagnostic.
+pub(crate) fn home_grid_lines(
+    shelves: &[crate::app::HomeShelf],
+    sel: (usize, usize),
+    theme: Theme,
+    avail_width: usize,
+) -> (Vec<Line<'static>>, usize) {
+    let accent = Style::default().fg(theme.accent).add_modifier(Modifier::BOLD);
+    let dim = Style::default().fg(theme.dim);
+    let (sel_shelf, sel_col) = sel;
+
+    const CARD_W: usize = 24; // total width incl. borders
+    const GAP: usize = 1;
+    let inner_w = CARD_W - 2;
+    let per_row = ((avail_width + GAP) / (CARD_W + GAP)).max(1);
+
+    let mut lines: Vec<Line> = Vec::new();
+    let mut sel_top = 0usize;
+
+    for (si, shelf) in shelves.iter().enumerate() {
+        let n = shelf.cards.len();
+        // Horizontal window: keep the selected card visible on its own shelf.
+        let start = if si == sel_shelf && sel_col >= per_row {
+            (sel_col + 1 - per_row).min(n.saturating_sub(per_row))
+        } else {
+            0
+        };
+        let end = (start + per_row).min(n);
+
+        // Title (+ a position hint when the shelf scrolls horizontally).
+        let mut title_spans = vec![Span::styled(format!(" {}", shelf.title), accent)];
+        if start > 0 || end < n {
+            title_spans.push(Span::styled(format!("   ‹{}–{}/{}›", start + 1, end, n), dim));
+        }
+        if si == sel_shelf {
+            sel_top = lines.len();
+        }
+        lines.push(Line::from(title_spans));
+
+        // Four lines per card row: top border, title, subtitle, bottom border.
+        let mut l_top: Vec<Span> = vec![Span::raw(" ")];
+        let mut l_title: Vec<Span> = vec![Span::raw(" ")];
+        let mut l_sub: Vec<Span> = vec![Span::raw(" ")];
+        let mut l_bot: Vec<Span> = vec![Span::raw(" ")];
+        let bar = "─".repeat(inner_w);
+        for col in start..end {
+            let card = &shelf.cards[col];
+            let selected = si == sel_shelf && col == sel_col;
+            let bstyle = if selected { accent } else { dim };
+            let tstyle = if selected { accent } else { Style::default() };
+            let marker = if selected { "‣" } else { " " };
+            l_top.push(Span::styled(format!("┌{bar}┐"), bstyle));
+            l_title.push(Span::styled("│", bstyle));
+            l_title.push(Span::styled(fit(&format!("{marker}{}", card.title), inner_w), tstyle));
+            l_title.push(Span::styled("│", bstyle));
+            l_sub.push(Span::styled("│", bstyle));
+            l_sub.push(Span::styled(fit(&format!(" {}", card.subtitle), inner_w), dim));
+            l_sub.push(Span::styled("│", bstyle));
+            l_bot.push(Span::styled(format!("└{bar}┘"), bstyle));
+            if col + 1 < end {
+                let g = " ".repeat(GAP);
+                l_top.push(Span::raw(g.clone()));
+                l_title.push(Span::raw(g.clone()));
+                l_sub.push(Span::raw(g.clone()));
+                l_bot.push(Span::raw(g));
+            }
+        }
+        if end < n {
+            l_title.push(Span::styled("  →", dim));
+        }
+        lines.push(Line::from(l_top));
+        lines.push(Line::from(l_title));
+        lines.push(Line::from(l_sub));
+        lines.push(Line::from(l_bot));
+        lines.push(Line::from("")); // gap between shelves
+    }
+
+    (lines, sel_top)
 }
 
-fn home_simple_line(theme: Theme, selected: bool, label: &str) -> Line<'static> {
-    let (marker, style) = if selected {
-        ("▶ ", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))
+/// Truncate (with an ellipsis) or right-pad `s` to exactly `w` columns.
+fn fit(s: &str, w: usize) -> String {
+    if w == 0 {
+        return String::new();
+    }
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= w {
+        let mut out: String = chars.iter().collect();
+        out.push_str(&" ".repeat(w - chars.len()));
+        out
     } else {
-        ("  ", Style::default())
-    };
-    Line::from(Span::styled(format!("  {marker}{label}"), style))
+        let mut out: String = chars[..w - 1].iter().collect();
+        out.push('…');
+        out
+    }
 }
 
 fn render_settings(f: &mut Frame, app: &App, area: Rect) {
@@ -903,4 +935,70 @@ fn centered_rect(area: Rect, pct_w: u16, height: u16) -> Rect {
     let x = area.x + (area.width.saturating_sub(w)) / 2;
     let y = area.y + (area.height.saturating_sub(height)) / 2;
     Rect { x, y, width: w.min(area.width), height: height.min(area.height) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::home_grid_lines;
+    use crate::app::{HomeCard, HomeItem, HomeShelf};
+    use crate::theme::Theme;
+
+    fn flatten(lines: &[ratatui::text::Line]) -> String {
+        lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn home_renders_bordered_cards_not_a_flat_list() {
+        let shelves = vec![
+            HomeShelf {
+                title: "Daily Mix".to_string(),
+                cards: vec![
+                    HomeCard {
+                        title: "Daily Mix 1".to_string(),
+                        subtitle: "Drake, Future".to_string(),
+                        item: HomeItem::Mix(0),
+                    },
+                    HomeCard {
+                        title: "Daily Mix 2".to_string(),
+                        subtitle: "Tame Impala".to_string(),
+                        item: HomeItem::Mix(1),
+                    },
+                ],
+            },
+            HomeShelf {
+                title: "Made For You".to_string(),
+                cards: vec![HomeCard {
+                    title: "Discover Weekly".to_string(),
+                    subtitle: "Your weekly mixtape".to_string(),
+                    item: HomeItem::Mix(2),
+                }],
+            },
+        ];
+
+        let (lines, _) = home_grid_lines(&shelves, (0, 0), Theme::default(), 80);
+        let text = flatten(&lines);
+
+        // Card borders are present → this is a grid of cards, not a plain list.
+        assert!(text.contains('┌'), "no top border:\n{text}");
+        assert!(text.contains('│'), "no side border:\n{text}");
+        assert!(text.contains('└'), "no bottom border:\n{text}");
+        // Both shelves and their cards show up.
+        assert!(text.contains("Daily Mix"));
+        assert!(text.contains("Daily Mix 1"));
+        assert!(text.contains("Discover Weekly"));
+        // The selected card is marked.
+        assert!(text.contains('‣'), "selected card not marked:\n{text}");
+        // Each shelf is title + 4 card lines + gap = 6 lines; two shelves ≈ 12
+        // lines — far more than a 3-item flat list would produce.
+        assert!(lines.len() >= 10, "too few lines for a card grid: {}", lines.len());
+    }
 }

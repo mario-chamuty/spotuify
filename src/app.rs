@@ -41,13 +41,28 @@ pub enum View {
     Home,
 }
 
-/// A selectable item in the Home view (headers are rendered separately).
+/// A selectable item in the Home view, identifying the underlying data.
 #[derive(Debug, Clone, Copy)]
 pub enum HomeItem {
+    /// A card in pathfinder shelf `shelf`, item `item` (real Spotify Home).
+    Shelf(usize, usize),
     Recent(usize),
     TopTrack(usize),
     TopArtist(usize),
     Mix(usize),
+}
+
+/// One category row on the Home grid (card-shelf layout).
+pub struct HomeShelf {
+    pub title: String,
+    pub cards: Vec<HomeCard>,
+}
+
+/// A single card on a shelf: two display lines plus how to activate it.
+pub struct HomeCard {
+    pub title: String,
+    pub subtitle: String,
+    pub item: HomeItem,
 }
 
 /// A restorable snapshot of a browse view, for the Esc back-stack.
@@ -221,7 +236,8 @@ pub struct App {
 
     // Home tab.
     pub home: Option<crate::spotify::Home>,
-    pub home_sel: usize,
+    /// Grid selection: `(shelf index, card index within that shelf)`.
+    pub home_sel: (usize, usize),
     pub home_loading: bool,
 }
 
@@ -338,7 +354,7 @@ impl App {
             show_visualizer: false,
             easter_egg: None,
             home: None,
-            home_sel: 0,
+            home_sel: (0, 0),
             home_loading: false,
         };
         // Reflect a restored now-playing track in the queue selection.
@@ -687,62 +703,200 @@ impl App {
     }
 
     /// Selectable Home items in display order (the renderer adds the headers).
+    /// When pathfinder shelves are present they are the Home; otherwise the
+    /// stable fallback shelves are shown.
     pub fn home_items(&self) -> Vec<HomeItem> {
         let mut v = Vec::new();
         if let Some(h) = &self.home {
-            v.extend((0..h.recently.len()).map(HomeItem::Recent));
-            v.extend((0..h.top_tracks.len()).map(HomeItem::TopTrack));
-            v.extend((0..h.top_artists.len()).map(HomeItem::TopArtist));
-            v.extend((0..h.mixes.len()).map(HomeItem::Mix));
+            if !h.shelves.is_empty() {
+                for (si, shelf) in h.shelves.iter().enumerate() {
+                    v.extend((0..shelf.items.len()).map(|ii| HomeItem::Shelf(si, ii)));
+                }
+            } else {
+                v.extend((0..h.recently.len()).map(HomeItem::Recent));
+                v.extend((0..h.top_tracks.len()).map(HomeItem::TopTrack));
+                v.extend((0..h.top_artists.len()).map(HomeItem::TopArtist));
+                v.extend((0..h.mixes.len()).map(HomeItem::Mix));
+            }
         }
         v
     }
 
+    /// The Home laid out as card shelves: the real pathfinder shelves (Daily
+    /// Mixes, Discover Weekly, genres) when present, otherwise the four stable
+    /// categories. Drives both navigation and rendering.
+    pub fn home_shelves(&self) -> Vec<HomeShelf> {
+        let mut shelves = Vec::new();
+        let Some(h) = &self.home else {
+            return shelves;
+        };
+
+        if !h.shelves.is_empty() {
+            for (si, shelf) in h.shelves.iter().enumerate() {
+                let cards: Vec<HomeCard> = shelf
+                    .items
+                    .iter()
+                    .enumerate()
+                    .map(|(ii, it)| HomeCard {
+                        title: it.name.clone(),
+                        subtitle: it.subtitle.clone(),
+                        item: HomeItem::Shelf(si, ii),
+                    })
+                    .collect();
+                if !cards.is_empty() {
+                    shelves.push(HomeShelf {
+                        title: shelf.title.clone(),
+                        cards,
+                    });
+                }
+            }
+            return shelves;
+        }
+
+        // Stable fallback: the four public-API categories.
+        if !h.recently.is_empty() {
+            shelves.push(HomeShelf {
+                title: "Recently played".to_string(),
+                cards: h
+                    .recently
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| HomeCard {
+                        title: t.name.clone(),
+                        subtitle: t.artists.clone(),
+                        item: HomeItem::Recent(i),
+                    })
+                    .collect(),
+            });
+        }
+        if !h.top_tracks.is_empty() {
+            shelves.push(HomeShelf {
+                title: "Your Top Tracks".to_string(),
+                cards: h
+                    .top_tracks
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| HomeCard {
+                        title: t.name.clone(),
+                        subtitle: t.artists.clone(),
+                        item: HomeItem::TopTrack(i),
+                    })
+                    .collect(),
+            });
+        }
+        if !h.top_artists.is_empty() {
+            shelves.push(HomeShelf {
+                title: "Your Top Artists".to_string(),
+                cards: h
+                    .top_artists
+                    .iter()
+                    .enumerate()
+                    .map(|(i, a)| HomeCard {
+                        title: a.name.clone(),
+                        subtitle: String::new(),
+                        item: HomeItem::TopArtist(i),
+                    })
+                    .collect(),
+            });
+        }
+        if !h.mixes.is_empty() {
+            shelves.push(HomeShelf {
+                title: "Made for you".to_string(),
+                cards: h
+                    .mixes
+                    .iter()
+                    .enumerate()
+                    .map(|(i, m)| HomeCard {
+                        title: m.label.clone(),
+                        subtitle: String::new(),
+                        item: HomeItem::Mix(i),
+                    })
+                    .collect(),
+            });
+        }
+        shelves
+    }
+
     fn handle_home_key(&mut self, key: KeyEvent) -> bool {
-        let len = self.home_items().len();
-        if len == 0 {
+        let shelves = self.home_shelves();
+        if shelves.is_empty() {
             return false;
         }
-        self.home_sel = self.home_sel.min(len - 1);
+        let (mut shelf, mut col) = self.home_sel;
+        shelf = shelf.min(shelves.len() - 1);
+        let cards_in = |s: usize| shelves[s].cards.len().saturating_sub(1);
+        col = col.min(cards_in(shelf));
         match key.code {
             KeyCode::Up | KeyCode::Char('k') => {
-                self.home_sel = self.home_sel.saturating_sub(1);
-                true
+                shelf = shelf.saturating_sub(1);
+                col = col.min(cards_in(shelf));
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                self.home_sel = (self.home_sel + 1).min(len - 1);
-                true
+                shelf = (shelf + 1).min(shelves.len() - 1);
+                col = col.min(cards_in(shelf));
+            }
+            KeyCode::Left | KeyCode::Char('h') => {
+                col = col.saturating_sub(1);
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                col = (col + 1).min(cards_in(shelf));
             }
             KeyCode::Home => {
-                self.home_sel = 0;
-                true
+                shelf = 0;
+                col = 0;
             }
             KeyCode::End => {
-                self.home_sel = len - 1;
-                true
+                shelf = shelves.len() - 1;
+                col = cards_in(shelf);
             }
             KeyCode::Enter => {
+                self.home_sel = (shelf, col);
                 self.activate_home();
-                true
+                return true;
             }
-            _ => false,
+            _ => return false,
         }
+        self.home_sel = (shelf, col);
+        true
     }
 
     fn activate_home(&mut self) {
-        let Some(item) = self.home_items().get(self.home_sel).copied() else {
-            return;
+        let (shelf, col) = self.home_sel;
+        let item = match self
+            .home_shelves()
+            .get(shelf)
+            .and_then(|s| s.cards.get(col))
+        {
+            Some(card) => card.item,
+            None => return,
         };
         enum A {
             Play(Vec<Track>, usize),
             Artist(String, String),
-            Mix(String, String),
+            Playlist(String, String),
+            Album(String, String),
         }
         // Resolve to owned data so the `&self.home` borrow ends before the
         // `&mut self` calls below.
         let act = {
             let Some(home) = self.home.as_ref() else { return };
             match item {
+                HomeItem::Shelf(si, ii) => {
+                    let Some(it) = home.shelves.get(si).and_then(|s| s.items.get(ii)) else {
+                        return;
+                    };
+                    let id = it.uri.rsplit(':').next().unwrap_or("").to_string();
+                    let name = it.name.clone();
+                    if it.uri.contains(":playlist:") {
+                        A::Playlist(id, name)
+                    } else if it.uri.contains(":album:") {
+                        A::Album(id, name)
+                    } else if it.uri.contains(":artist:") {
+                        A::Artist(id, name)
+                    } else {
+                        return;
+                    }
+                }
                 HomeItem::Recent(i) => A::Play(home.recently.clone(), i),
                 HomeItem::TopTrack(i) => A::Play(home.top_tracks.clone(), i),
                 HomeItem::TopArtist(i) => match home.top_artists.get(i) {
@@ -750,7 +904,7 @@ impl App {
                     None => return,
                 },
                 HomeItem::Mix(i) => match home.mixes.get(i) {
-                    Some(m) => A::Mix(m.playlist_id.clone(), m.label.clone()),
+                    Some(m) => A::Playlist(m.playlist_id.clone(), m.label.clone()),
                     None => return,
                 },
             }
@@ -761,7 +915,8 @@ impl App {
                 self.on_track_changed();
             }
             A::Artist(id, name) => self.spawn_open_artist(id, name),
-            A::Mix(id, label) => self.spawn_open_playlist(id, label, OpenMode::Show),
+            A::Playlist(id, label) => self.spawn_open_playlist(id, label, OpenMode::Show),
+            A::Album(id, name) => self.spawn_open_album(id, name, OpenMode::Show),
         }
     }
 
@@ -770,18 +925,41 @@ impl App {
         self.status = "Loading Home…".to_string();
         let spotify = self.spotify.clone();
         let session = self.player.session();
+        let sp_dc_cfg = self.config.sp_dc.clone();
         let tx = self.updates_tx.clone();
         tokio::spawn(async move {
-            let recently = spotify.recently_played().await.unwrap_or_default();
-            let top_tracks = spotify.top_tracks().await.unwrap_or_default();
-            let top_artists = spotify.top_artists().await.unwrap_or_default();
-            let seeds: Vec<(String, String)> = top_tracks
-                .iter()
-                .take(6)
-                .map(|t| (t.uri.clone(), t.name.clone()))
-                .collect();
-            let mixes = crate::browse::inspired_mixes(&session, &seeds).await;
-            let home = crate::spotify::Home { recently, top_tracks, top_artists, mixes };
+            let mut home = crate::spotify::Home::default();
+
+            // The real Spotify Home (Daily Mixes, Discover Weekly, genre/mood
+            // shelves) via the private pathfinder API. Uses the configured
+            // sp_dc cookie, or auto-detects one from a local browser profile.
+            let sp_dc =
+                tokio::task::spawn_blocking(move || crate::cookie::resolve(&sp_dc_cfg))
+                    .await
+                    .unwrap_or_default();
+            if !sp_dc.trim().is_empty() {
+                let token = crate::webtoken::WebToken::new(sp_dc);
+                match crate::pathfinder::home_shelves(&token).await {
+                    Ok(shelves) => home.shelves = shelves,
+                    Err(e) => tracing::warn!("pathfinder Home unavailable, using fallback: {e:#}"),
+                }
+            }
+
+            // Stable fallback shelves when pathfinder yielded nothing (no cookie,
+            // expired cookie, or API refusal).
+            if home.shelves.is_empty() {
+                home.recently = spotify.recently_played().await.unwrap_or_default();
+                home.top_tracks = spotify.top_tracks().await.unwrap_or_default();
+                home.top_artists = spotify.top_artists().await.unwrap_or_default();
+                let seeds: Vec<(String, String)> = home
+                    .top_tracks
+                    .iter()
+                    .take(6)
+                    .map(|t| (t.uri.clone(), t.name.clone()))
+                    .collect();
+                home.mixes = crate::browse::inspired_mixes(&session, &seeds).await;
+            }
+
             let _ = tx.send(Update::Home(Box::new(home)));
         });
     }
@@ -2314,7 +2492,7 @@ impl App {
             Update::Home(home) => {
                 self.home = Some(*home);
                 self.home_loading = false;
-                self.home_sel = 0;
+                self.home_sel = (0, 0);
                 self.status = "Home".to_string();
             }
             Update::Error(msg) => {

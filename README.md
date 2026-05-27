@@ -69,6 +69,34 @@ SpoTUIfy needs two logins, for two jobs (both cached after the first run):
 Run it again: open the `Browse to: …` URL(s) it prints, approve access, and
 you're in. Credentials are cached under `~/.cache/spotuify/`.
 
+### Real Home (optional, automatic)
+
+This is **entirely optional** — SpoTUIfy works fully without it; the Home tab
+just falls back to shelves built from the public Web API (recently played, your
+top tracks/artists, "Made for you" mixes). It also needs **no setup** to enable.
+
+Spotify's Daily Mixes, Discover Weekly, Release Radar and genre/mood shelves
+live behind a private GraphQL API that only accepts the **web player's** own
+tokens. SpoTUIfy gets one for you automatically: if you're logged into Spotify
+in a local browser, it auto-detects your `sp_dc` session cookie (Firefox's
+plaintext cookie store, or Chromium-family stores it can decrypt on Linux),
+mints a web-player token from it (via a TOTP whose secret it fetches from a
+community registry, so nothing is hardcoded or rotates stale), and reads your
+Home from Spotify's own endpoint.
+
+So just log into <https://open.spotify.com> in your browser and open the Home
+tab. To check what was detected without starting playback, run
+`spotuify --home-probe` (it prints your shelves). If auto-detection can't find a
+cookie (no logged-in browser, or a keyring-locked Chromium store), set it
+manually in the config:
+
+```toml
+sp_dc = "AQB…(long value)…"   # DevTools → Application → Cookies → open.spotify.com
+```
+
+The cookie is only ever read locally and sent only to Spotify. Without one, Home
+falls back to the stable shelves built from the public API.
+
 ## Keybindings
 
 All bindings are configurable via the `[keys]` table (see below). Defaults:
@@ -99,12 +127,14 @@ live energy meter is shown next to each band.
 ## Features
 
 - **Local playback** via librespot — the app is its own Connect device.
-- **Home** (`7`) — a personalized landing page: Recently played, Your top
-  tracks/artists, and "Made for you" inspired-by mixes (Spotify-generated
-  playlists, the nearest stable analog to Daily Mixes). Top tracks/artists need
-  a one-time re-login (adds `user-top-read`). *Daily Mix 1–6 and genre/mood
-  shelves aren't available* — they live behind Spotify's private Home GraphQL,
-  off-limits to non-extended apps.
+- **Home** (`7`) — your personalized landing page. If you're logged into
+  Spotify in a local browser, this is the **real Spotify Home** — Daily Mix 1–6,
+  Discover Weekly, Release Radar and the genre/mood shelves — fetched live from
+  Spotify's private Home GraphQL using a session cookie it auto-detects (see
+  Setup). Otherwise it falls back to stable shelves built from the public API:
+  Recently played, your top tracks/artists, and "Made for you" inspired-by
+  mixes. Either way it's laid out as Spotify-style card shelves: `↑`/`↓` moves
+  between shelves, `←`/`→` between cards, `Enter` plays/opens the card.
 - **Search** tracks, albums, artists, playlists and podcasts. Open an
   album/playlist/show into its tracks, or an **artist into their discography**
   (then open an album for its tracks).
@@ -139,6 +169,7 @@ live energy meter is shown next to each band.
 | --- | --- |
 | `client_id` | Your Spotify app Client ID (required for search/library). |
 | `redirect_uri` | OAuth redirect; must match your app exactly. Default `http://127.0.0.1:8888/callback`. |
+| `sp_dc` | Spotify web-session cookie for the real Home (Daily Mixes, genre/mood shelves). Auto-detected from your browser; set only as a manual override. See below. |
 | `audio_backend` | librespot backend; `rodio` (default) works via cpal. |
 | `audio_device` | Output device name; unset = system default (the Output tab edits this). |
 | `volume` | Startup volume, 0–100. |

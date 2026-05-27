@@ -35,9 +35,16 @@ pub struct MixRef {
     pub playlist_id: String,
 }
 
-/// Personalized Home content (assembled from several endpoints).
+/// Personalized Home content.
+///
+/// When an `sp_dc` cookie is configured, `shelves` holds the real Spotify Home
+/// (Daily Mixes, Discover Weekly, genre/mood shelves) fetched via the private
+/// pathfinder GraphQL API. Otherwise it falls back to the stable shelves
+/// assembled from the public Web API + librespot radio.
 #[derive(Debug, Clone, Default)]
 pub struct Home {
+    /// Real Spotify Home shelves (pathfinder). Non-empty → these are shown.
+    pub shelves: Vec<crate::pathfinder::Shelf>,
     pub recently: Vec<Track>,
     pub top_tracks: Vec<Track>,
     pub top_artists: Vec<ArtistRef>,

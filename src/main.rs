@@ -8,6 +8,7 @@ mod audio;
 mod auth;
 mod browse;
 mod config;
+mod cookie;
 mod eq;
 mod keys;
 mod lyrics;
@@ -16,12 +17,14 @@ mod model;
 // MPRIS is a freedesktop/Linux interface; only built there.
 #[cfg(target_os = "linux")]
 mod mpris;
+mod pathfinder;
 mod persist;
 mod player;
 mod snapshot;
 mod spotify;
 mod theme;
 mod ui;
+mod webtoken;
 
 use std::io::{self, Stdout};
 
@@ -58,6 +61,14 @@ async fn main() -> Result<()> {
             std::process::exit(1);
         }
     };
+
+    // Diagnostic: `spotuify --home-probe` mints a web-player token from the
+    // configured `sp_dc` cookie and prints the real Home shelves (Daily Mixes,
+    // genre/mood, …) without starting playback or the TUI. Used to verify the
+    // pathfinder Home end-to-end.
+    if std::env::args().any(|a| a == "--home-probe") {
+        return probe_home(&config).await;
+    }
 
     // Authentication and the playback session connect before the TUI starts so
     // the OAuth "Browse to: …" prompt is visible on the normal screen.
@@ -104,6 +115,62 @@ async fn main() -> Result<()> {
     if let Err(e) = result {
         eprintln!("SpoTUIfy exited with an error: {e:?}");
         std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// Mint a web-player token from the `sp_dc` cookie and print the real Home
+/// shelves. No auth, playback or TUI — purely a verification path.
+async fn probe_home(config: &Config) -> Result<()> {
+    let sp_dc = cookie::resolve(&config.sp_dc);
+    if sp_dc.trim().is_empty() {
+        eprintln!(
+            "No `sp_dc` cookie found — couldn't auto-detect one from a browser, \
+             and none is set in config. Log into open.spotify.com in Firefox/Chrome, \
+             or set `sp_dc` manually. See the README."
+        );
+        std::process::exit(1);
+    }
+    let source = if config.sp_dc.trim().is_empty() {
+        "auto-detected from browser"
+    } else {
+        "from config"
+    };
+    println!("Using sp_dc ({source}). Minting web-player token and fetching Home…\n");
+    let token = webtoken::WebToken::new(sp_dc);
+    let shelves = match pathfinder::home_shelves(&token).await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Home probe failed: {e:#}");
+            std::process::exit(1);
+        }
+    };
+
+    // Render exactly what the TUI's Home tab draws: card shelves. This proves
+    // the layout rather than describing it.
+    let grid: Vec<app::HomeShelf> = shelves
+        .iter()
+        .enumerate()
+        .map(|(si, s)| app::HomeShelf {
+            title: s.title.clone(),
+            cards: s
+                .items
+                .iter()
+                .enumerate()
+                .map(|(ii, it)| app::HomeCard {
+                    title: it.name.clone(),
+                    subtitle: it.subtitle.clone(),
+                    item: app::HomeItem::Shelf(si, ii),
+                })
+                .collect(),
+        })
+        .collect();
+
+    println!("Got {} shelves — rendered as the Home tab draws them:\n", grid.len());
+    let (lines, _) = ui::home_grid_lines(&grid, (0, 0), theme::Theme::default(), 100);
+    for line in &lines {
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        println!("{text}");
     }
     Ok(())
 }
