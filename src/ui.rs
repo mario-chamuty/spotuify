@@ -136,7 +136,9 @@ fn render_help(f: &mut Frame, app: &App, area: Rect) {
 
 fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
     let theme = app.theme;
-    let titles = ["1 Search", "2 Library", "3 Tracks", "4 Queue", "5 Output", "6 Settings"];
+    let titles = [
+        "1 Search", "2 Library", "3 Tracks", "4 Queue", "5 Output", "6 Settings", "7 Home",
+    ];
     let selected = match app.view {
         View::Search => 0,
         View::Library => 1,
@@ -144,6 +146,7 @@ fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
         View::Queue => 3,
         View::Devices => 4,
         View::Settings => 5,
+        View::Home => 6,
     };
     let tabs = Tabs::new(titles.iter().map(|t| Span::raw(*t)).collect::<Vec<_>>())
         .select(selected)
@@ -161,6 +164,7 @@ fn render_main(f: &mut Frame, app: &mut App, area: Rect) {
         View::Queue => render_queue(f, app, area),
         View::Devices => render_devices(f, app, area),
         View::Settings => render_settings(f, app, area),
+        View::Home => render_home(f, app, area),
     }
 }
 
@@ -644,6 +648,110 @@ fn render_equalizer(f: &mut Frame, app: &App, area: Rect) {
         .collect();
 
     f.render_widget(Paragraph::new(Text::from(lines)), inner);
+}
+
+fn render_home(f: &mut Frame, app: &App, area: Rect) {
+    let theme = app.theme;
+    let block = panel(theme, " Home · ↑↓ select · Enter play/open ");
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let Some(home) = &app.home else {
+        let txt = if app.home_loading {
+            "\n  Loading your Home…"
+        } else {
+            "\n  Home will load when you open it."
+        };
+        f.render_widget(Paragraph::new(txt).style(Style::default().fg(theme.dim)), inner);
+        return;
+    };
+
+    let accent = Style::default().fg(theme.accent).add_modifier(Modifier::BOLD);
+    let mut lines: Vec<Line> = Vec::new();
+    let mut i = 0usize; // running selectable index
+    let mut sel_line = 0usize;
+    let sel = app.home_sel;
+
+    let section = |lines: &mut Vec<Line>, title: &str| {
+        if !lines.is_empty() {
+            lines.push(Line::from(""));
+        }
+        lines.push(Line::from(Span::styled(format!(" {title}"), accent)));
+    };
+
+    if !home.recently.is_empty() {
+        section(&mut lines, "Recently played");
+        for t in &home.recently {
+            if i == sel {
+                sel_line = lines.len();
+            }
+            lines.push(home_track_line(theme, i == sel, &t.name, &t.artists));
+            i += 1;
+        }
+    }
+    if !home.top_tracks.is_empty() {
+        section(&mut lines, "Your top tracks");
+        for t in &home.top_tracks {
+            if i == sel {
+                sel_line = lines.len();
+            }
+            lines.push(home_track_line(theme, i == sel, &t.name, &t.artists));
+            i += 1;
+        }
+    }
+    if !home.top_artists.is_empty() {
+        section(&mut lines, "Your top artists");
+        for a in &home.top_artists {
+            if i == sel {
+                sel_line = lines.len();
+            }
+            lines.push(home_simple_line(theme, i == sel, &a.name));
+            i += 1;
+        }
+    }
+    if !home.mixes.is_empty() {
+        section(&mut lines, "Made for you");
+        for m in &home.mixes {
+            if i == sel {
+                sel_line = lines.len();
+            }
+            lines.push(home_simple_line(theme, i == sel, &m.label));
+            i += 1;
+        }
+    }
+    if i == 0 {
+        lines.push(Line::from(Span::styled(
+            "  Nothing to show — try playing some music first.",
+            Style::default().fg(theme.dim),
+        )));
+    }
+
+    // Scroll so the selected row stays roughly centred.
+    let h = inner.height as usize;
+    let max_scroll = lines.len().saturating_sub(h);
+    let scroll = sel_line.saturating_sub(h / 2).min(max_scroll) as u16;
+    f.render_widget(Paragraph::new(Text::from(lines)).scroll((scroll, 0)), inner);
+}
+
+fn home_track_line(theme: Theme, selected: bool, name: &str, artists: &str) -> Line<'static> {
+    let (marker, style) = if selected {
+        ("▶ ", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))
+    } else {
+        ("  ", Style::default())
+    };
+    Line::from(vec![
+        Span::styled(format!("  {marker}{name}"), style),
+        Span::styled(format!("  —  {artists}"), Style::default().fg(theme.dim)),
+    ])
+}
+
+fn home_simple_line(theme: Theme, selected: bool, label: &str) -> Line<'static> {
+    let (marker, style) = if selected {
+        ("▶ ", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))
+    } else {
+        ("  ", Style::default())
+    };
+    Line::from(Span::styled(format!("  {marker}{label}"), style))
 }
 
 fn render_settings(f: &mut Frame, app: &App, area: Rect) {

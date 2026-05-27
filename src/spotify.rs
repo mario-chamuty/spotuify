@@ -28,6 +28,22 @@ pub struct ArtistRef {
     pub name: String,
 }
 
+/// A "made for you" mix: a Spotify-generated playlist seeded from a track.
+#[derive(Debug, Clone)]
+pub struct MixRef {
+    pub label: String,
+    pub playlist_id: String,
+}
+
+/// Personalized Home content (assembled from several endpoints).
+#[derive(Debug, Clone, Default)]
+pub struct Home {
+    pub recently: Vec<Track>,
+    pub top_tracks: Vec<Track>,
+    pub top_artists: Vec<ArtistRef>,
+    pub mixes: Vec<MixRef>,
+}
+
 /// A podcast/audiobook episode search row (playable directly).
 #[derive(Debug, Clone)]
 pub struct EpisodeRef {
@@ -356,6 +372,63 @@ impl Spotify {
             }
         }
         Ok(out)
+    }
+
+    /// Recently played tracks (de-duplicated), for the Home tab.
+    pub async fn recently_played(&self) -> Result<Vec<Track>> {
+        let v = self
+            .web_get("me/player/recently-played", &[("limit", "40")])
+            .await
+            .context("fetching recently played failed")?;
+        #[derive(serde::Deserialize)]
+        struct Item {
+            #[serde(default)]
+            track: Option<RawPlayable>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Page {
+            #[serde(default)]
+            items: Vec<Item>,
+        }
+        let page: Page = serde_json::from_value(v).context("parsing recently played")?;
+        let mut seen = std::collections::HashSet::new();
+        Ok(page
+            .items
+            .into_iter()
+            .filter_map(|i| i.track)
+            .filter_map(raw_to_track)
+            .filter(|t| seen.insert(t.uri.clone()))
+            .collect())
+    }
+
+    /// The user's top tracks (requires the `user-top-read` scope).
+    pub async fn top_tracks(&self) -> Result<Vec<Track>> {
+        let v = self
+            .web_get("me/top/tracks", &[("limit", "30"), ("time_range", "short_term")])
+            .await
+            .context("fetching top tracks failed")?;
+        #[derive(serde::Deserialize)]
+        struct Page {
+            #[serde(default)]
+            items: Vec<RawPlayable>,
+        }
+        let page: Page = serde_json::from_value(v).context("parsing top tracks")?;
+        Ok(page.items.into_iter().filter_map(raw_to_track).collect())
+    }
+
+    /// The user's top artists (requires the `user-top-read` scope).
+    pub async fn top_artists(&self) -> Result<Vec<ArtistRef>> {
+        let v = self
+            .web_get("me/top/artists", &[("limit", "20"), ("time_range", "short_term")])
+            .await
+            .context("fetching top artists failed")?;
+        #[derive(serde::Deserialize)]
+        struct Page {
+            #[serde(default)]
+            items: Vec<RawArtistObj>,
+        }
+        let page: Page = serde_json::from_value(v).context("parsing top artists")?;
+        Ok(page.items.into_iter().map(artist_ref).collect())
     }
 
     /// All episodes of a show (podcast), most-recent first as Spotify returns

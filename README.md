@@ -75,7 +75,7 @@ All bindings are configurable via the `[keys]` table (see below). Defaults:
 
 | Key | Action |
 | --- | --- |
-| `1`–`6` | Switch to Search / Library / Tracks / Queue / Output / Settings |
+| `1`–`7` | Switch to Search / Library / Tracks / Queue / Output / Settings / Home |
 | `Tab` / `Shift+Tab` | Next / previous tab · (in search box) cycle result type |
 | `/` | Filter the current list; in Search, focus the query box |
 | `i` | Focus the search box (`↑`/`↓` recall search history) |
@@ -99,6 +99,12 @@ live energy meter is shown next to each band.
 ## Features
 
 - **Local playback** via librespot — the app is its own Connect device.
+- **Home** (`7`) — a personalized landing page: Recently played, Your top
+  tracks/artists, and "Made for you" inspired-by mixes (Spotify-generated
+  playlists, the nearest stable analog to Daily Mixes). Top tracks/artists need
+  a one-time re-login (adds `user-top-read`). *Daily Mix 1–6 and genre/mood
+  shelves aren't available* — they live behind Spotify's private Home GraphQL,
+  off-limits to non-extended apps.
 - **Search** tracks, albums, artists, playlists and podcasts. Open an
   album/playlist/show into its tracks, or an **artist into their discography**
   (then open an album for its tracks).

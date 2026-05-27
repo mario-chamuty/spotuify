@@ -95,5 +95,14 @@ async fn main() -> Result<()> {
             Err(e) => println!("\n{pl}\n  get_context error: {e}"),
         }
     }
+    // "Made for you" radio seed (internal API).
+    let seed = SpotifyUri::from_uri("spotify:track:4cOdK2wGLETKBW3PvgPWqT").unwrap();
+    match session.spclient().get_radio_for_track(&seed).await {
+        Ok(bytes) => {
+            let s = String::from_utf8_lossy(&bytes);
+            println!("\nradio seed_to_playlist ({} bytes):\n{}", bytes.len(), &s[..s.len().min(500)]);
+        }
+        Err(e) => println!("\nradio error: {e}"),
+    }
     Ok(())
 }

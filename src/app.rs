@@ -38,6 +38,16 @@ pub enum View {
     Queue,
     Devices,
     Settings,
+    Home,
+}
+
+/// A selectable item in the Home view (headers are rendered separately).
+#[derive(Debug, Clone, Copy)]
+pub enum HomeItem {
+    Recent(usize),
+    TopTrack(usize),
+    TopArtist(usize),
+    Mix(usize),
 }
 
 /// A restorable snapshot of a browse view, for the Esc back-stack.
@@ -208,6 +218,11 @@ pub struct App {
 
     /// A transient note flashed next to the volume (easter egg).
     pub easter_egg: Option<(Egg, std::time::Instant)>,
+
+    // Home tab.
+    pub home: Option<crate::spotify::Home>,
+    pub home_sel: usize,
+    pub home_loading: bool,
 }
 
 /// Volume easter eggs.
@@ -322,6 +337,9 @@ impl App {
             viz_avg_db: [-30.0; crate::eq::BANDS],
             show_visualizer: false,
             easter_egg: None,
+            home: None,
+            home_sel: 0,
+            home_loading: false,
         };
         // Reflect a restored now-playing track in the queue selection.
         if let Some(i) = app.player.current {
@@ -479,6 +497,10 @@ impl App {
         if self.view == View::Settings && self.handle_settings_key(key) {
             return;
         }
+        // The Home view navigates its shelves with arrows/Enter.
+        if self.view == View::Home && self.handle_home_key(key) {
+            return;
+        }
 
         // Resolve the chord to an action via the (configurable) keymap.
         let Some(action) = self.keymap.action(key.code, key.modifiers) else {
@@ -513,6 +535,7 @@ impl App {
             Action::TabQueue => self.view = View::Queue,
             Action::TabDevices => self.goto_devices(),
             Action::TabSettings => self.view = View::Settings,
+            Action::TabHome => self.goto_home(),
             Action::CycleTab => self.cycle_view(),
             Action::Help => self.show_help(),
             Action::FocusSearch => {
@@ -626,14 +649,16 @@ impl App {
             View::Tracklist => View::Queue,
             View::Queue => View::Devices,
             View::Devices => View::Settings,
-            View::Settings => View::Search,
+            View::Settings => View::Home,
+            View::Home => View::Search,
         };
         self.on_view_entered();
     }
 
     fn cycle_view_back(&mut self) {
         self.view = match self.view {
-            View::Search => View::Settings,
+            View::Search => View::Home,
+            View::Home => View::Settings,
             View::Settings => View::Devices,
             View::Devices => View::Queue,
             View::Queue => View::Tracklist,
@@ -649,7 +674,116 @@ impl App {
             self.goto_library();
         } else if self.view == View::Devices {
             self.goto_devices();
+        } else if self.view == View::Home {
+            self.goto_home();
         }
+    }
+
+    fn goto_home(&mut self) {
+        self.view = View::Home;
+        if self.home.is_none() && !self.home_loading {
+            self.spawn_load_home();
+        }
+    }
+
+    /// Selectable Home items in display order (the renderer adds the headers).
+    pub fn home_items(&self) -> Vec<HomeItem> {
+        let mut v = Vec::new();
+        if let Some(h) = &self.home {
+            v.extend((0..h.recently.len()).map(HomeItem::Recent));
+            v.extend((0..h.top_tracks.len()).map(HomeItem::TopTrack));
+            v.extend((0..h.top_artists.len()).map(HomeItem::TopArtist));
+            v.extend((0..h.mixes.len()).map(HomeItem::Mix));
+        }
+        v
+    }
+
+    fn handle_home_key(&mut self, key: KeyEvent) -> bool {
+        let len = self.home_items().len();
+        if len == 0 {
+            return false;
+        }
+        self.home_sel = self.home_sel.min(len - 1);
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.home_sel = self.home_sel.saturating_sub(1);
+                true
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.home_sel = (self.home_sel + 1).min(len - 1);
+                true
+            }
+            KeyCode::Home => {
+                self.home_sel = 0;
+                true
+            }
+            KeyCode::End => {
+                self.home_sel = len - 1;
+                true
+            }
+            KeyCode::Enter => {
+                self.activate_home();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn activate_home(&mut self) {
+        let Some(item) = self.home_items().get(self.home_sel).copied() else {
+            return;
+        };
+        enum A {
+            Play(Vec<Track>, usize),
+            Artist(String, String),
+            Mix(String, String),
+        }
+        // Resolve to owned data so the `&self.home` borrow ends before the
+        // `&mut self` calls below.
+        let act = {
+            let Some(home) = self.home.as_ref() else { return };
+            match item {
+                HomeItem::Recent(i) => A::Play(home.recently.clone(), i),
+                HomeItem::TopTrack(i) => A::Play(home.top_tracks.clone(), i),
+                HomeItem::TopArtist(i) => match home.top_artists.get(i) {
+                    Some(a) => A::Artist(a.id.clone(), a.name.clone()),
+                    None => return,
+                },
+                HomeItem::Mix(i) => match home.mixes.get(i) {
+                    Some(m) => A::Mix(m.playlist_id.clone(), m.label.clone()),
+                    None => return,
+                },
+            }
+        };
+        match act {
+            A::Play(tracks, i) => {
+                self.player.play_tracks(tracks, i);
+                self.on_track_changed();
+            }
+            A::Artist(id, name) => self.spawn_open_artist(id, name),
+            A::Mix(id, label) => self.spawn_open_playlist(id, label, OpenMode::Show),
+        }
+    }
+
+    fn spawn_load_home(&mut self) {
+        self.home_loading = true;
+        self.status = "Loading Home…".to_string();
+        let spotify = self.spotify.clone();
+        let session = self.player.session();
+        let tx = self.updates_tx.clone();
+        tokio::spawn(async move {
+            let recently = spotify.recently_played().await.unwrap_or_default();
+            let top_tracks = spotify.top_tracks().await.unwrap_or_default();
+            let top_artists = spotify.top_artists().await.unwrap_or_default();
+            let seeds: Vec<(String, String)> = top_tracks
+                .iter()
+                .take(6)
+                .map(|t| (t.uri.clone(), t.name.clone()))
+                .collect();
+            let mixes = crate::browse::inspired_mixes(&session, &seeds).await;
+            let home = crate::spotify::Home { recently, top_tracks, top_artists, mixes };
+            let _ = tx.send(Update::Home(Box::new(home)));
+        });
     }
 
     fn goto_library(&mut self) {
@@ -730,6 +864,7 @@ impl App {
             }
             View::Devices => self.device_rows().len(),
             View::Settings => SettingRow::all().len(),
+            View::Home => self.home_items().len(),
         }
     }
 
@@ -740,8 +875,8 @@ impl App {
             View::Tracklist => &mut self.tracklist_state,
             View::Queue => &mut self.queue_state,
             View::Devices => &mut self.device_state,
-            // Settings has its own (arrow-driven) navigation; never uses this.
-            View::Settings => &mut self.library_state,
+            // Settings/Home have their own (arrow-driven) navigation.
+            View::Settings | View::Home => &mut self.library_state,
         }
     }
 
@@ -950,7 +1085,7 @@ impl App {
                 }
             }
             View::Devices => self.activate_device_selection(),
-            View::Settings => {} // handled by handle_settings_key
+            View::Settings | View::Home => {} // handled by their own key handlers
         }
     }
 
@@ -1329,7 +1464,7 @@ impl App {
                 v
             }
             View::Devices => self.devices.iter().map(|d| d.name.clone()).collect(),
-            View::Search | View::Settings => Vec::new(),
+            View::Search | View::Settings | View::Home => Vec::new(),
         }
     }
 
@@ -2175,6 +2310,12 @@ impl App {
                     self.lyrics = lyrics;
                     self.lyrics_for = Some(track_uri);
                 }
+            }
+            Update::Home(home) => {
+                self.home = Some(*home);
+                self.home_loading = false;
+                self.home_sel = 0;
+                self.status = "Home".to_string();
             }
             Update::Error(msg) => {
                 tracing::error!("{msg}");

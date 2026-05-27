@@ -50,6 +50,7 @@ const WEB_API_SCOPES: &[&str] = &[
     "user-modify-playback-state",
     "user-read-currently-playing",
     "user-read-recently-played",
+    "user-top-read",
 ];
 
 /// What `authenticate` hands back: librespot credentials for the playback

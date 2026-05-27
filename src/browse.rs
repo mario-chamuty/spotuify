@@ -56,6 +56,41 @@ pub async fn playlist_tracks(session: &Session, playlist: &str) -> Result<Vec<Tr
     Ok(indexed.into_iter().filter_map(|(_, t)| t).collect())
 }
 
+/// "Made for you" mixes: for each seed `(track_uri, track_name)`, ask Spotify's
+/// internal radio for a generated "inspired by" playlist. Returns
+/// `(label, playlist_id)` pairs. The nearest stable analog to Daily Mixes.
+pub async fn inspired_mixes(
+    session: &Session,
+    seeds: &[(String, String)],
+) -> Vec<crate::spotify::MixRef> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for (uri, name) in seeds.iter().take(6) {
+        let Ok(su) = SpotifyUri::from_uri(uri) else { continue };
+        let Ok(bytes) = session.spclient().get_radio_for_track(&su).await else {
+            continue;
+        };
+        let Ok(json) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            continue;
+        };
+        let playlist = json
+            .get("mediaItems")
+            .and_then(|m| m.get(0))
+            .and_then(|x| x.get("uri"))
+            .and_then(|u| u.as_str())
+            .and_then(|u| u.strip_prefix("spotify:playlist:"));
+        if let Some(id) = playlist {
+            if seen.insert(id.to_string()) {
+                out.push(crate::spotify::MixRef {
+                    label: format!("Inspired by {name}"),
+                    playlist_id: id.to_string(),
+                });
+            }
+        }
+    }
+    out
+}
+
 async fn fetch_track(session: &Session, uri: &str) -> Option<Track> {
     // Episodes can appear in playlists but have no track metadata; skip them.
     if uri.contains(":episode:") {

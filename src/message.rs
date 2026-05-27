@@ -47,5 +47,7 @@ pub enum Update {
         track_uri: String,
         lyrics: Option<crate::lyrics::Lyrics>,
     },
+    /// Assembled Home content.
+    Home(Box<crate::spotify::Home>),
     Error(String),
 }
