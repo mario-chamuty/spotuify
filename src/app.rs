@@ -176,6 +176,15 @@ pub struct App {
 
     /// Selected row in the Settings view (index into `SettingRow::all()`).
     pub settings_sel: usize,
+
+    // Spectrum analyzer.
+    spectrum: crate::analyzer::SharedSpectrum,
+    /// Smoothed per-band display levels (0..1) for the visualizer.
+    pub viz_levels: [f32; crate::eq::BANDS],
+    /// Slow per-band dB average, for the experimental EQ suggestion.
+    viz_avg_db: [f32; crate::eq::BANDS],
+    /// Show the spectrum visualizer in the Now Playing panel.
+    pub show_visualizer: bool,
 }
 
 /// A decoded album cover bound to a terminal pixel-graphics protocol.
@@ -226,6 +235,7 @@ impl App {
             search_history = state.search_history;
         }
 
+        let spectrum = player.spectrum();
         let mut app = Self {
             config,
             spotify,
@@ -276,6 +286,10 @@ impl App {
             eq_sel: 0,
             help_open: false,
             settings_sel: 0,
+            spectrum,
+            viz_levels: [0.0; crate::eq::BANDS],
+            viz_avg_db: [-30.0; crate::eq::BANDS],
+            show_visualizer: false,
         };
         // Reflect a restored now-playing track in the queue selection.
         if let Some(i) = app.player.current {
@@ -304,6 +318,7 @@ impl App {
         let mut events = EventStream::new();
         let mut ticker = tokio::time::interval(Duration::from_millis(250));
         let mut remote_poll = tokio::time::interval(Duration::from_millis(1500));
+        let mut viz_poll = tokio::time::interval(Duration::from_millis(60));
         let mut player_events = self.player.take_events();
         // Take the external-control receiver out so we can borrow it in select!.
         let mut control_rx = self.control_rx.take();
@@ -327,6 +342,7 @@ impl App {
                 }
                 _ = ticker.tick() => {}
                 _ = remote_poll.tick() => self.spawn_poll_remote(),
+                _ = viz_poll.tick() => self.update_spectrum(),
                 Some(event) = player_events.recv() => {
                     if self.player.on_event(event) {
                         self.on_track_changed();
@@ -495,6 +511,10 @@ impl App {
                 };
             }
             Action::ToggleEqualizer => self.eq_open = !self.eq_open,
+            Action::ToggleVisualizer => {
+                self.show_visualizer = !self.show_visualizer;
+                self.status = format!("Visualizer {}", on_off(self.show_visualizer));
+            }
             Action::EnterFilter => self.enter_filter(),
             Action::CreatePlaylist => self.prompt_create_playlist(),
             Action::RenamePlaylist => self.prompt_rename_playlist(),
@@ -1394,6 +1414,7 @@ impl App {
             KeyCode::Char(' ') | KeyCode::Char('t') => eq.toggle(),
             KeyCode::Char('p') => self.apply_preset(1),
             KeyCode::Char('P') => self.apply_preset(-1),
+            KeyCode::Char('a') => self.apply_suggestion(),
             _ => {}
         }
         // Mirror into config so the change survives a restart (also saved on quit).
@@ -1537,6 +1558,55 @@ impl App {
             Ok(()) => self.status = "Signed out — restart SpoTUIfy to log in again.".to_string(),
             Err(e) => self.status = format!("Sign out failed: {e}"),
         }
+    }
+
+    // ---- Spectrum analyzer -------------------------------------------------
+
+    /// Refresh the visualizer's per-band levels (smoothed) and the slow dB
+    /// average used by the EQ suggestion. Only runs while something is shown.
+    fn update_spectrum(&mut self) {
+        if !(self.show_visualizer || self.eq_open) {
+            return;
+        }
+        let playing = self.player.status == crate::player::Status::Playing;
+        for i in 0..crate::eq::BANDS {
+            let rms = if playing { self.spectrum.band(i) } else { 0.0 };
+            let db = 20.0 * (rms + 1e-6).log10();
+            let target = ((db + 60.0) / 60.0).clamp(0.0, 1.0);
+            let cur = self.viz_levels[i];
+            // Fast attack, slow decay reads well for a bar meter.
+            let rate = if target > cur { 0.5 } else { 0.15 };
+            self.viz_levels[i] = cur + (target - cur) * rate;
+            if playing && rms > 1e-4 {
+                self.viz_avg_db[i] += (db - self.viz_avg_db[i]) * 0.03;
+            }
+        }
+    }
+
+    /// Experimental: nudge the EQ toward a flatter balance based on the measured
+    /// long-term spectrum (loud bands cut a little, quiet bands lifted), capped
+    /// at ±6 dB. Needs a few seconds of playback first.
+    fn apply_suggestion(&mut self) {
+        let max = self.viz_avg_db.iter().copied().fold(f32::MIN, f32::max);
+        let min = self.viz_avg_db.iter().copied().fold(f32::MAX, f32::min);
+        if max - min < 1.0 {
+            self.status = "Play a track for a few seconds, then press a.".to_string();
+            return;
+        }
+        let mean: f32 = self.viz_avg_db.iter().sum::<f32>() / crate::eq::BANDS as f32;
+        let eq = self.player.eq();
+        for i in 0..crate::eq::BANDS {
+            let delta = -((self.viz_avg_db[i] - mean) * 0.4);
+            let target = (delta.round() as i32).clamp(-6, 6);
+            eq.adjust(i, target - eq.gain(i)); // set band to `target`
+        }
+        if !eq.enabled() {
+            eq.toggle();
+        }
+        self.config.equalizer.enabled = eq.enabled();
+        self.config.equalizer.gains_db = eq.gains();
+        let _ = self.config.save();
+        self.status = "Suggested EQ from the spectrum (experimental).".to_string();
     }
 
     // ---- Modal prompt + picker handling ------------------------------------

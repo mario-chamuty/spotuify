@@ -217,11 +217,13 @@ impl EqProcessor {
     }
 }
 
-/// A [`Sink`] that EQs samples then forwards them to the real backend sink.
+/// A [`Sink`] that EQs samples (when enabled) and measures their spectrum,
+/// then forwards them to the real backend sink.
 struct EqSink {
     inner: Box<dyn Sink>,
     proc: EqProcessor,
     state: SharedEq,
+    probe: crate::analyzer::SpectrumProbe,
 }
 
 impl Sink for EqSink {
@@ -235,9 +237,13 @@ impl Sink for EqSink {
 
     fn write(&mut self, packet: AudioPacket, converter: &mut Converter) -> SinkResult<()> {
         let packet = match packet {
-            AudioPacket::Samples(mut samples) if self.state.enabled() => {
-                self.proc.sync(&self.state);
-                self.proc.process(&mut samples);
+            AudioPacket::Samples(mut samples) => {
+                if self.state.enabled() {
+                    self.proc.sync(&self.state);
+                    self.proc.process(&mut samples);
+                }
+                // Analyse what is actually output (post-EQ).
+                self.probe.feed(&samples);
                 AudioPacket::Samples(samples)
             }
             other => other,
@@ -246,11 +252,17 @@ impl Sink for EqSink {
     }
 }
 
-/// Wrap a backend sink so the equalizer runs ahead of it.
-pub fn wrap(inner: Box<dyn Sink>, state: SharedEq) -> Box<dyn Sink> {
+/// Wrap a backend sink so the equalizer runs ahead of it and the spectrum probe
+/// observes the output.
+pub fn wrap(
+    inner: Box<dyn Sink>,
+    state: SharedEq,
+    spectrum: crate::analyzer::SharedSpectrum,
+) -> Box<dyn Sink> {
     Box::new(EqSink {
         inner,
         proc: EqProcessor::new(),
         state,
+        probe: crate::analyzer::SpectrumProbe::new(spectrum),
     })
 }

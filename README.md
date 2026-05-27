@@ -87,11 +87,13 @@ All bindings are configurable via the `[keys]` table (see below). Defaults:
 | `s` · `r` | Toggle shuffle · cycle repeat (off→all→one) |
 | `L` · `a` | Like/unlike track · add track to a playlist |
 | `c` / `R` / `D` | Create / rename / remove a playlist (Library) |
-| `y` · `E` | Toggle the lyrics panel · open the equalizer |
+| `y` · `E` · `v` | Toggle lyrics · open the equalizer · toggle the spectrum visualizer |
 | `?` · `q` / `Ctrl-C` | Show all keybindings (modal) · quit |
 
 In the **equalizer** overlay: `←`/`→` select a band, `↑`/`↓` adjust its gain,
-`0` reset the band, `R` flatten all, `space` toggle EQ on/off, `Esc` close.
+`p`/`P` cycle presets, `a` suggest an EQ from the live spectrum (experimental),
+`0` reset the band, `R` flatten all, `space` toggle EQ on/off, `Esc` close. A
+live energy meter is shown next to each band.
 
 ## Features
 
@@ -106,6 +108,10 @@ In the **equalizer** overlay: `←`/`→` select a band, `↑`/`↓` adjust its 
 - **10-band graphic equalizer** (`E`) — peaking-filter EQ applied in the audio
   path, adjustable live and persisted, with presets (Flat, Bass Boost, Rock,
   Pop, Jazz, Dance, Vocal, …; `p` cycles them). Also editable in the Settings tab.
+- **Spectrum analyzer** — a real-time bandpass-filter spectrum, shown as a
+  visualizer in Now Playing (`v`) and as live meters in the equalizer. An
+  experimental `a` (in the EQ overlay) suggests gains by nudging the measured
+  spectrum toward balance (no genre data — Spotify removed it for dev apps).
 - **Settings tab** (`6`) — toggle normalisation/EQ, set volume, tune the EQ
   bands, change album-art mode, and sign out / re-authenticate. `↑↓` select,
   `←→` change, `Enter` toggles or resets.

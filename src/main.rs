@@ -2,6 +2,7 @@
 //! search, playlists, queues, output selection and colored album art.
 
 mod albumart;
+mod analyzer;
 mod app;
 mod audio;
 mod auth;

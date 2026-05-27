@@ -82,6 +82,7 @@ pub struct Player {
     position_anchor: Instant,
     current_id: Option<SpotifyUri>,
     eq: crate::eq::SharedEq,
+    spectrum: crate::analyzer::SharedSpectrum,
     /// Whether `current_id` has actually been loaded into librespot. A restored
     /// session sets `current` without loading, so the first play loads it.
     loaded: bool,
@@ -118,6 +119,7 @@ impl Player {
         let audio_format = AudioFormat::default();
         let device = config.audio_device.clone();
         let eq = crate::eq::EqState::new(config.equalizer.enabled, &config.equalizer.gains_db);
+        let spectrum = crate::analyzer::SpectrumState::new();
         let inner = build_inner(
             &player_config,
             &session,
@@ -127,6 +129,7 @@ impl Player {
             audio_format,
             &events_tx,
             &eq,
+            &spectrum,
         )?;
 
         Ok(Self {
@@ -149,6 +152,7 @@ impl Player {
             position_anchor: Instant::now(),
             current_id: None,
             eq,
+            spectrum,
             loaded: false,
             rng_state: seed(),
         })
@@ -165,6 +169,7 @@ impl Player {
             self.audio_format,
             &self.events_tx,
             &self.eq,
+            &self.spectrum,
         )?;
         Ok(())
     }
@@ -172,6 +177,11 @@ impl Player {
     /// Shared equalizer state, for the UI to read/adjust live.
     pub fn eq(&self) -> crate::eq::SharedEq {
         self.eq.clone()
+    }
+
+    /// Shared spectrum state, for the analyzer/visualizer.
+    pub fn spectrum(&self) -> crate::analyzer::SharedSpectrum {
+        self.spectrum.clone()
     }
 
     /// A clone of the connected session (for metadata fetches like lyrics).
@@ -512,11 +522,13 @@ fn build_inner(
     audio_format: AudioFormat,
     events_tx: &mpsc::UnboundedSender<PlayerEvent>,
     eq: &crate::eq::SharedEq,
+    spectrum: &crate::analyzer::SharedSpectrum,
 ) -> Result<Arc<LibrespotPlayer>> {
     let backend_fn = audio_backend::find(Some(backend.to_string()))
         .ok_or_else(|| anyhow!("unknown audio backend `{backend}`"))?;
     let eq = eq.clone();
-    let sink_builder = move || crate::eq::wrap(backend_fn(device, audio_format), eq);
+    let spectrum = spectrum.clone();
+    let sink_builder = move || crate::eq::wrap(backend_fn(device, audio_format), eq, spectrum);
 
     let inner = LibrespotPlayer::new(
         player_config.clone(),

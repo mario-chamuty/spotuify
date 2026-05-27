@@ -309,7 +309,9 @@ fn render_devices(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn render_now_playing(f: &mut Frame, app: &mut App, area: Rect) {
     let theme = app.theme;
-    let title = if app.show_lyrics {
+    let title = if app.show_visualizer {
+        " Spectrum ".to_string()
+    } else if app.show_lyrics {
         match app.lyrics_or_status() {
             Ok(l) if !l.provider.is_empty() => format!(" Lyrics · {} ", l.provider),
             _ => " Lyrics ".to_string(),
@@ -333,7 +335,9 @@ fn render_now_playing(f: &mut Frame, app: &mut App, area: Rect) {
     let cols = (rows * 2).min(art_area.width);
     app.art_size = (cols, rows);
 
-    if app.show_lyrics {
+    if app.show_visualizer {
+        render_visualizer(f, app, art_area);
+    } else if app.show_lyrics {
         render_lyrics(f, app, art_area);
     } else {
         let art_drawn = crate::albumart::render_into(app, f, art_area, cols, rows);
@@ -494,13 +498,48 @@ fn render_picker(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_stateful_widget(list, rect, &mut picker.state);
 }
 
+/// A vertical bar spectrum (one bar per EQ band, low→high left→right).
+fn render_visualizer(f: &mut Frame, app: &App, area: Rect) {
+    use crate::eq::{BANDS, LABELS};
+    const BLOCKS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let theme = app.theme;
+    if area.width < BANDS as u16 || area.height < 2 {
+        return;
+    }
+    let bw = (area.width as usize / BANDS).max(1);
+    let label_row = bw >= 3;
+    let h = if label_row { area.height as usize - 1 } else { area.height as usize };
+
+    let mut lines: Vec<Line> = Vec::with_capacity(area.height as usize);
+    for r in 0..h {
+        let cell_from_bottom = (h - 1 - r) as f32;
+        let mut spans = Vec::with_capacity(BANDS);
+        for b in 0..BANDS {
+            let eighths = app.viz_levels[b].clamp(0.0, 1.0) * h as f32 * 8.0 - cell_from_bottom * 8.0;
+            let ch = BLOCKS[eighths.round().clamp(0.0, 8.0) as usize];
+            spans.push(Span::styled(
+                ch.to_string().repeat(bw),
+                Style::default().fg(theme.accent),
+            ));
+        }
+        lines.push(Line::from(spans));
+    }
+    if label_row {
+        let labels: Vec<Span> = (0..BANDS)
+            .map(|b| Span::styled(format!("{:^bw$}", LABELS[b]), Style::default().fg(theme.dim)))
+            .collect();
+        lines.push(Line::from(labels));
+    }
+    f.render_widget(Paragraph::new(Text::from(lines)), area);
+}
+
 fn render_equalizer(f: &mut Frame, app: &App, area: Rect) {
     use crate::eq::{BANDS, LABELS, MAX_DB};
     let theme = app.theme;
     let eq = app.player.eq();
     let enabled = eq.enabled();
 
-    let rect = centered_rect(area, 52, BANDS as u16 + 2);
+    let rect = centered_rect(area, 64, BANDS as u16 + 2);
     f.render_widget(Clear, rect);
 
     let state = if enabled { "ON" } else { "OFF" };
@@ -508,7 +547,7 @@ fn render_equalizer(f: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.accent))
         .title(format!(
-            " Equalizer [{state}] · {} · ←→ band · ↑↓ ±dB · p preset · 0/R reset · space · Esc ",
+            " Equalizer [{state}] · {} · ↑↓±dB · p preset · a suggest · 0/R reset · space · Esc ",
             app.preset_name()
         ));
     let inner = block.inner(rect);
@@ -544,9 +583,13 @@ fn render_equalizer(f: &mut Frame, app: &App, area: Rect) {
             } else {
                 Style::default().fg(theme.like)
             };
+            // Live energy meter for this band (from the spectrum analyzer).
+            let filled = (app.viz_levels[b] * 6.0).round() as usize;
+            let meter: String = (0..6).map(|i| if i < filled { '▰' } else { '▱' }).collect();
             Line::from(vec![
                 Span::styled(format!("{:>3} {:>+3} ", LABELS[b], gain), label_style),
                 Span::styled(bar, bar_style),
+                Span::styled(format!("  {meter}"), Style::default().fg(theme.dim)),
             ])
         })
         .collect();
