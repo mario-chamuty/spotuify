@@ -1,10 +1,11 @@
 name: CI
 
+# Don't run on plain pushes to a branch — only validate pull requests, or when
+# run manually. Release builds are tag-triggered (see release.yml).
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
