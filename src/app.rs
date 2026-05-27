@@ -207,7 +207,14 @@ pub struct App {
     pub show_visualizer: bool,
 
     /// A transient note flashed next to the volume (easter egg).
-    pub easter_egg: Option<(&'static str, std::time::Instant)>,
+    pub easter_egg: Option<(Egg, std::time::Instant)>,
+}
+
+/// Volume easter eggs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Egg {
+    Nice,
+    SixSeven,
 }
 
 /// A decoded album cover bound to a terminal pixel-graphics protocol.
@@ -1173,13 +1180,13 @@ impl App {
 
     /// A tiny easter egg: flash a note next to the volume at certain values.
     fn trigger_volume_egg(&mut self, pct: u8) {
-        let msg = match pct {
-            69 => Some("*nice*"),
-            67 => Some("six seveeeen 🫳🫴"),
+        let egg = match pct {
+            69 => Some(Egg::Nice),
+            67 => Some(Egg::SixSeven),
             _ => None,
         };
-        if let Some(m) = msg {
-            self.easter_egg = Some((m, std::time::Instant::now()));
+        if let Some(egg) = egg {
+            self.easter_egg = Some((egg, std::time::Instant::now()));
         }
     }
 

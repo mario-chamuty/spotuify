@@ -433,7 +433,15 @@ fn render_playback_bar(f: &mut Frame, app: &App, area: Rect) {
     let mode = if app.remote_active() { "  REMOTE" } else { "" };
     // Easter egg: a note that flashes next to the volume for ~2s.
     let egg = match app.easter_egg {
-        Some((msg, at)) if at.elapsed() < std::time::Duration::from_secs(2) => format!(" {msg}"),
+        Some((egg, at)) if at.elapsed() < std::time::Duration::from_secs(2) => match egg {
+            crate::app::Egg::Nice => " *nice*".to_string(),
+            crate::app::Egg::SixSeven => {
+                // Bounce: each palm-up hand dips down (🫳) in turn → up/down motion.
+                const FRAMES: [&str; 4] = ["🫴🫳", "🫴🫴", "🫳🫴", "🫴🫴"];
+                let frame = FRAMES[(at.elapsed().as_millis() / 180) as usize % FRAMES.len()];
+                format!(" six seveeeen {frame}")
+            }
+        },
         _ => String::new(),
     };
     let title = format!(
