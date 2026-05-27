@@ -1397,6 +1397,9 @@ impl App {
 
     fn handle_eq_key(&mut self, key: KeyEvent) {
         let eq = self.player.eq();
+        // Whether this key changed the curve (so we can auto-enable the EQ —
+        // otherwise "changing the equalizer does nothing" because it's off).
+        let mut changed = false;
         match key.code {
             KeyCode::Esc | KeyCode::Char('E') | KeyCode::Char('q') => self.eq_open = false,
             KeyCode::Left | KeyCode::Char('h') => self.eq_sel = self.eq_sel.saturating_sub(1),
@@ -1405,17 +1408,29 @@ impl App {
             }
             KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('+') | KeyCode::Char('=') => {
                 eq.adjust(self.eq_sel, 1);
+                changed = true;
             }
             KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('-') | KeyCode::Char('_') => {
                 eq.adjust(self.eq_sel, -1);
+                changed = true;
             }
-            KeyCode::Char('0') => eq.adjust(self.eq_sel, -eq.gain(self.eq_sel)),
-            KeyCode::Char('R') => eq.reset(),
+            KeyCode::Char('0') => {
+                eq.adjust(self.eq_sel, -eq.gain(self.eq_sel));
+                changed = true;
+            }
+            KeyCode::Char('R') => {
+                eq.reset();
+                changed = true;
+            }
             KeyCode::Char(' ') | KeyCode::Char('t') => eq.toggle(),
             KeyCode::Char('p') => self.apply_preset(1),
             KeyCode::Char('P') => self.apply_preset(-1),
             KeyCode::Char('a') => self.apply_suggestion(),
             _ => {}
+        }
+        // Touching a band turns the EQ on, so the change is audible immediately.
+        if changed && !eq.enabled() {
+            eq.toggle();
         }
         // Mirror into config so the change survives a restart (also saved on quit).
         self.config.equalizer.enabled = eq.enabled();
@@ -1484,6 +1499,10 @@ impl App {
             SettingRow::EqBand(i) => {
                 let eq = self.player.eq();
                 eq.adjust(i, dir);
+                if !eq.enabled() {
+                    eq.toggle(); // adjusting a band turns the EQ on
+                }
+                self.config.equalizer.enabled = eq.enabled();
                 self.config.equalizer.gains_db = eq.gains();
                 let _ = self.config.save();
             }
@@ -1530,6 +1549,10 @@ impl App {
         } as usize;
         let (name, gains) = &crate::eq::PRESETS[next];
         eq.set_gains(gains);
+        if !eq.enabled() {
+            eq.toggle();
+        }
+        self.config.equalizer.enabled = eq.enabled();
         self.config.equalizer.gains_db = eq.gains();
         let _ = self.config.save();
         self.status = format!("EQ preset: {name}");
