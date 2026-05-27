@@ -6,7 +6,7 @@
 use anyhow::{Context, Result};
 use rspotify::clients::{BaseClient, OAuthClient};
 use rspotify::model::{
-    AlbumId, EpisodeId, PlayableId, PlaylistId, ShowId, TrackId,
+    AlbumId, ArtistId, EpisodeId, PlayableId, PlaylistId, ShowId, TrackId,
 };
 
 use rspotify::prelude::Id;
@@ -341,19 +341,36 @@ impl Spotify {
         Ok(tracks)
     }
 
-    /// An artist's popular tracks. Spotify's 2026 changes return 403 on
-    /// `/artists/{id}/top-tracks` for non-extended apps, so we approximate it
-    /// with an artist-scoped track search (which still works).
-    pub async fn artist_top_tracks(&self, artist_name: &str) -> Result<Vec<Track>> {
-        let query = format!("artist:\"{artist_name}\"");
-        match self
-            .search(&query, SearchKind::Tracks)
+    /// An artist's albums and singles (their discography), newest first as
+    /// Spotify returns them, de-duplicated by title. `/artists/{id}/top-tracks`
+    /// is 403 for non-extended apps in 2026, but `/albums` still works, so the
+    /// artist view browses albums (open one to see its tracks).
+    pub async fn artist_albums(&self, artist_id: &str) -> Result<Vec<AlbumRef>> {
+        let id = ArtistId::from_id_or_uri(artist_id).context("bad artist id")?;
+        let v = self
+            .web_get(
+                &format!("artists/{}/albums", id.id()),
+                &[
+                    ("market", "from_token"),
+                    ("include_groups", "album,single"),
+                    ("limit", "50"),
+                ],
+            )
             .await
-            .context("fetching artist top tracks failed")?
-        {
-            SearchResults::Tracks(tracks) => Ok(tracks),
-            _ => Ok(Vec::new()),
+            .context("fetching artist albums failed")?;
+        #[derive(serde::Deserialize)]
+        struct Page {
+            #[serde(default)]
+            items: Vec<RawAlbumSearch>,
         }
+        let page: Page = serde_json::from_value(v).context("parsing artist albums")?;
+        let mut seen = std::collections::HashSet::new();
+        Ok(page
+            .items
+            .into_iter()
+            .map(album_ref)
+            .filter(|a| seen.insert(a.name.to_lowercase()))
+            .collect())
     }
 
     /// All episodes of a show (podcast), most-recent first as Spotify returns

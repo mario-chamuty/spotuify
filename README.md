@@ -96,8 +96,9 @@ In the **equalizer** overlay: `←`/`→` select a band, `↑`/`↓` adjust its 
 ## Features
 
 - **Local playback** via librespot — the app is its own Connect device.
-- **Search** tracks, albums, artists, playlists and podcasts; open any into a
-  track list.
+- **Search** tracks, albums, artists, playlists and podcasts. Open an
+  album/playlist/show into its tracks, or an **artist into their discography**
+  (then open an album for its tracks).
 - **Library** — your playlists and Liked Songs, with like/add/create/rename.
 - **Queue** with shuffle and repeat (off/all/one).
 - **Time-synced lyrics** (`y`) — scrolling, line-highlighted, with a plain-text
