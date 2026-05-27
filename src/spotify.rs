@@ -6,7 +6,7 @@
 use anyhow::{Context, Result};
 use rspotify::clients::{BaseClient, OAuthClient};
 use rspotify::model::{
-    AlbumId, ArtistId, EpisodeId, PlayableId, PlaylistId, ShowId, TrackId,
+    AlbumId, EpisodeId, PlayableId, PlaylistId, ShowId, TrackId,
 };
 
 use rspotify::prelude::Id;
@@ -341,25 +341,19 @@ impl Spotify {
         Ok(tracks)
     }
 
-    /// An artist's top tracks for the user's market. Routed through raw HTTP so
-    /// a 403 (Spotify deprecated this endpoint for development-mode apps in
-    /// 2026) surfaces as a clear "unavailable" message instead of a parse error.
-    pub async fn artist_top_tracks(&self, artist_id: &str) -> Result<Vec<Track>> {
-        let id = ArtistId::from_id_or_uri(artist_id).context("bad artist id")?;
-        let v = self
-            .web_get(
-                &format!("artists/{}/top-tracks", id.id()),
-                &[("market", "from_token")],
-            )
+    /// An artist's popular tracks. Spotify's 2026 changes return 403 on
+    /// `/artists/{id}/top-tracks` for non-extended apps, so we approximate it
+    /// with an artist-scoped track search (which still works).
+    pub async fn artist_top_tracks(&self, artist_name: &str) -> Result<Vec<Track>> {
+        let query = format!("artist:\"{artist_name}\"");
+        match self
+            .search(&query, SearchKind::Tracks)
             .await
-            .context("fetching artist top tracks failed")?;
-        #[derive(serde::Deserialize)]
-        struct TopTracks {
-            #[serde(default)]
-            tracks: Vec<RawPlayable>,
+            .context("fetching artist top tracks failed")?
+        {
+            SearchResults::Tracks(tracks) => Ok(tracks),
+            _ => Ok(Vec::new()),
         }
-        let tt: TopTracks = serde_json::from_value(v).context("parsing top tracks")?;
-        Ok(tt.tracks.into_iter().filter_map(raw_to_track).collect())
     }
 
     /// All episodes of a show (podcast), most-recent first as Spotify returns

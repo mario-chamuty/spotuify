@@ -1446,11 +1446,12 @@ impl App {
     }
 
     fn spawn_open_artist(&mut self, id: String, name: String) {
+        let _ = id;
         self.status = format!("Loading “{name}” top tracks…");
         let spotify = self.spotify.clone();
         let tx = self.updates_tx.clone();
         tokio::spawn(async move {
-            let msg = match spotify.artist_top_tracks(&id).await {
+            let msg = match spotify.artist_top_tracks(&name).await {
                 Ok(tracks) => Update::Tracks {
                     title: format!("{name} — top tracks"),
                     tracks,
