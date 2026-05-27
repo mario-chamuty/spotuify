@@ -43,8 +43,9 @@ pub enum View {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingRow {
     Normalisation,
-    EqEnabled,
     Volume,
+    EqEnabled,
+    EqPreset,
     EqBand(usize),
     ArtMode,
     ReAuth,
@@ -53,7 +54,12 @@ pub enum SettingRow {
 impl SettingRow {
     /// All rows in display order.
     pub fn all() -> Vec<SettingRow> {
-        let mut v = vec![SettingRow::Normalisation, SettingRow::EqEnabled, SettingRow::Volume];
+        let mut v = vec![
+            SettingRow::Normalisation,
+            SettingRow::Volume,
+            SettingRow::EqEnabled,
+            SettingRow::EqPreset,
+        ];
         v.extend((0..crate::eq::BANDS).map(SettingRow::EqBand));
         v.push(SettingRow::ArtMode);
         v.push(SettingRow::ReAuth);
@@ -1386,6 +1392,8 @@ impl App {
             KeyCode::Char('0') => eq.adjust(self.eq_sel, -eq.gain(self.eq_sel)),
             KeyCode::Char('R') => eq.reset(),
             KeyCode::Char(' ') | KeyCode::Char('t') => eq.toggle(),
+            KeyCode::Char('p') => self.apply_preset(1),
+            KeyCode::Char('P') => self.apply_preset(-1),
             _ => {}
         }
         // Mirror into config so the change survives a restart (also saved on quit).
@@ -1451,6 +1459,7 @@ impl App {
                 self.config.volume = self.player.volume_percent();
                 let _ = self.config.save();
             }
+            SettingRow::EqPreset => self.apply_preset(dir),
             SettingRow::EqBand(i) => {
                 let eq = self.player.eq();
                 eq.adjust(i, dir);
@@ -1464,9 +1473,8 @@ impl App {
 
     fn activate_setting(&mut self, row: SettingRow) {
         match row {
-            SettingRow::Normalisation | SettingRow::EqEnabled | SettingRow::ArtMode => {
-                self.adjust_setting(row, 1)
-            }
+            SettingRow::Normalisation | SettingRow::EqEnabled | SettingRow::ArtMode
+            | SettingRow::EqPreset => self.adjust_setting(row, 1),
             SettingRow::EqBand(i) => {
                 let eq = self.player.eq();
                 eq.adjust(i, -eq.gain(i)); // reset band to 0 dB
@@ -1487,6 +1495,31 @@ impl App {
             }
             Err(e) => self.status = format!("Normalisation change failed: {e}"),
         }
+    }
+
+    /// Apply the next/previous EQ preset (wrapping). From a custom curve, steps
+    /// to the first/last preset.
+    fn apply_preset(&mut self, dir: i32) {
+        let eq = self.player.eq();
+        let len = crate::eq::PRESETS.len() as i32;
+        let next = match eq.matched_preset() {
+            Some(i) => (i as i32 + dir).rem_euclid(len),
+            None if dir >= 0 => 0,
+            None => len - 1,
+        } as usize;
+        let (name, gains) = &crate::eq::PRESETS[next];
+        eq.set_gains(gains);
+        self.config.equalizer.gains_db = eq.gains();
+        let _ = self.config.save();
+        self.status = format!("EQ preset: {name}");
+    }
+
+    /// Name of the active EQ preset, or "Custom".
+    pub fn preset_name(&self) -> &'static str {
+        self.player
+            .eq()
+            .matched_preset()
+            .map_or("Custom", |i| crate::eq::PRESETS[i].0)
     }
 
     fn cycle_art_mode(&mut self, dir: i32) {

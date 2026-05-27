@@ -104,7 +104,8 @@ In the **equalizer** overlay: `←`/`→` select a band, `↑`/`↓` adjust its 
 - **Time-synced lyrics** (`y`) — scrolling, line-highlighted, with a plain-text
   fallback for unsynced lyrics.
 - **10-band graphic equalizer** (`E`) — peaking-filter EQ applied in the audio
-  path, adjustable live and persisted. Also editable in the Settings tab.
+  path, adjustable live and persisted, with presets (Flat, Bass Boost, Rock,
+  Pop, Jazz, Dance, Vocal, …; `p` cycles them). Also editable in the Settings tab.
 - **Settings tab** (`6`) — toggle normalisation/EQ, set volume, tune the EQ
   bands, change album-art mode, and sign out / re-authenticate. `↑↓` select,
   `←→` change, `Enter` toggles or resets.

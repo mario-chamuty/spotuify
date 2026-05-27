@@ -33,6 +33,24 @@ pub const LABELS: [&str; BANDS] = [
 /// Gain limit per band, in dB.
 pub const MAX_DB: i32 = 12;
 
+/// Common graphic-EQ presets (gain per band in dB), in the order
+/// 31, 62, 125, 250, 500, 1k, 2k, 4k, 8k, 16k.
+pub const PRESETS: &[(&str, [i32; BANDS])] = &[
+    ("Flat", [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+    ("Bass Boost", [8, 7, 6, 4, 2, 0, 0, 0, 0, 0]),
+    ("Treble Boost", [0, 0, 0, 0, 0, 1, 3, 5, 7, 8]),
+    ("Loudness", [7, 5, 0, -1, -2, -1, 0, 1, 5, 7]),
+    ("Rock", [5, 4, 3, 1, -1, -1, 1, 3, 4, 5]),
+    ("Pop", [-1, 1, 3, 4, 4, 2, 0, -1, -1, -2]),
+    ("Hip-Hop", [6, 5, 4, 2, 0, -1, -1, 1, 2, 3]),
+    ("Dance", [6, 5, 2, 0, 0, -3, -4, -4, 1, 2]),
+    ("Jazz", [4, 3, 1, 2, -1, -1, 0, 1, 3, 4]),
+    ("Classical", [5, 4, 3, 2, -1, -1, 0, 2, 3, 4]),
+    ("Acoustic", [4, 4, 3, 1, 2, 2, 3, 3, 2, 1]),
+    ("Electronic", [5, 4, 1, 0, -2, 1, 1, 2, 4, 5]),
+    ("Vocal", [-2, -3, -2, 1, 4, 5, 4, 3, 1, -1]),
+];
+
 /// Shared, lock-free EQ state adjustable from the UI thread.
 pub struct EqState {
     enabled: AtomicBool,
@@ -80,6 +98,20 @@ impl EqState {
     /// Snapshot of the gains, for persisting to config.
     pub fn gains(&self) -> Vec<i32> {
         self.gains_db.iter().map(|g| g.load(Ordering::Relaxed)).collect()
+    }
+
+    /// Set every band at once (e.g. when applying a preset).
+    pub fn set_gains(&self, gains: &[i32]) {
+        for (i, slot) in self.gains_db.iter().enumerate() {
+            let v = gains.get(i).copied().unwrap_or(0).clamp(-MAX_DB, MAX_DB);
+            slot.store(v, Ordering::Relaxed);
+        }
+    }
+
+    /// Index of the [`PRESETS`] entry matching the current gains, if any.
+    pub fn matched_preset(&self) -> Option<usize> {
+        let cur = self.gains();
+        PRESETS.iter().position(|(_, g)| g.as_slice() == cur.as_slice())
     }
 }
 

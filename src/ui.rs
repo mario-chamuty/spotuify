@@ -508,7 +508,8 @@ fn render_equalizer(f: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.accent))
         .title(format!(
-            " Equalizer [{state}] · ←→ band · ↑↓ ±dB · 0 reset · R flat · space · Esc "
+            " Equalizer [{state}] · {} · ←→ band · ↑↓ ±dB · p preset · 0/R reset · space · Esc ",
+            app.preset_name()
         ));
     let inner = block.inner(rect);
     f.render_widget(block, rect);
@@ -570,7 +571,7 @@ fn render_settings(f: &mut Frame, app: &App, area: Rect) {
     let mut lines: Vec<Line> = vec![header("Playback")];
     for (i, row) in rows.iter().enumerate() {
         match row {
-            SettingRow::EqBand(0) => {
+            SettingRow::EqEnabled => {
                 lines.push(Line::from(""));
                 lines.push(header("Equalizer"));
             }
@@ -593,7 +594,8 @@ fn render_settings(f: &mut Frame, app: &App, area: Rect) {
             SettingRow::Normalisation => {
                 ("Normalisation".to_string(), on_off(app.config.normalisation).to_string())
             }
-            SettingRow::EqEnabled => ("Equalizer".to_string(), on_off(eq.enabled()).to_string()),
+            SettingRow::EqEnabled => ("Enabled".to_string(), on_off(eq.enabled()).to_string()),
+            SettingRow::EqPreset => ("Preset".to_string(), format!("‹ {} ›", app.preset_name())),
             SettingRow::Volume => ("Volume".to_string(), format!("{}%", app.player.volume_percent())),
             SettingRow::EqBand(b) => {
                 let g = eq.gain(b);
