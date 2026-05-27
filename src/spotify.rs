@@ -248,39 +248,9 @@ impl Spotify {
         Ok(page.items.into_iter().flatten().map(playlist_ref).collect())
     }
 
-    /// All tracks of a playlist, following pagination. Uses the 2026 `items`
-    /// endpoint (`/playlists/{id}/tracks` now returns 403) via raw HTTP.
-    pub async fn playlist_tracks(&self, playlist_id: &str) -> Result<Vec<Track>> {
-        let id = PlaylistId::from_id_or_uri(playlist_id).context("bad playlist id")?;
-        let id = id.id().to_string();
-        let mut tracks = Vec::new();
-        let mut offset = 0u32;
-        loop {
-            let off = offset.to_string();
-            let v = self
-                .web_get(
-                    &format!("playlists/{id}/items"),
-                    &[("market", "from_token"), ("limit", "100"), ("offset", &off)],
-                )
-                .await
-                .context("fetching playlist items failed")?;
-            let page: ItemsPage =
-                serde_json::from_value(v).context("parsing playlist items")?;
-            let got = page.items.len() as u32;
-            tracks.extend(
-                page.items
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|item| item.track)
-                    .filter_map(raw_to_track),
-            );
-            offset += got;
-            if got == 0 || page.next.is_none() {
-                break;
-            }
-        }
-        Ok(tracks)
-    }
+    // Playlist tracks are fetched over the playback session in `crate::browse`:
+    // the Web API `playlists/{id}/tracks` and `/items` endpoints both return 403
+    // for development-mode apps since Spotify's 2026 changes.
 
     /// The user's "Liked Songs" (first 50). Raw HTTP: the 2026 API strips
     /// fields rspotify's track model requires.
@@ -751,13 +721,11 @@ fn playlist_ref(p: RawPlaylist) -> PlaylistRef {
     }
 }
 
-/// A page of playlist items from `/playlists/{id}/items`.
+/// A page of saved-track items from `/me/tracks`.
 #[derive(serde::Deserialize)]
 struct ItemsPage {
     #[serde(default)]
     items: Vec<Option<PlaylistItem>>,
-    #[serde(default)]
-    next: Option<String>,
 }
 
 #[derive(serde::Deserialize)]

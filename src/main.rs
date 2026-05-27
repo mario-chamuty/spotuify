@@ -5,6 +5,7 @@ mod albumart;
 mod app;
 mod audio;
 mod auth;
+mod browse;
 mod config;
 mod eq;
 mod keys;

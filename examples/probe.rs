@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use librespot::core::cache::Cache;
 use librespot::core::{Session, SessionConfig, SpotifyId, SpotifyUri};
 use librespot::metadata::audio::AudioItem;
-use librespot::metadata::Lyrics;
+use librespot::metadata::{Lyrics, Metadata};
 
 const TEST_URIS: &[&str] = &[
     "spotify:track:5YnMOGu7F9sn2ODpwDvpHP", // one that failed in the logs
@@ -54,6 +54,45 @@ async fn main() -> Result<()> {
                 ),
                 Err(e) => println!("  lyrics      : none ({e})"),
             }
+        }
+    }
+
+    // Playlist via the internal context API (the Web API /tracks is 403 for
+    // development-mode apps in 2026). Test a small + large + editorial playlist.
+    for pl in [
+        "spotify:playlist:7ETnL4fbHNcIdV1JmRuCZd", // editorial (403 on the Web API)
+    ] {
+        match session.spclient().get_context(pl).await {
+            Ok(ctx) => {
+                let total: usize = ctx.pages.iter().map(|p| p.tracks.len()).sum();
+                println!("\n{pl}\n  pages={} inline_tracks={total}", ctx.pages.len());
+                // Resolve names for the first few via track metadata.
+                for t in ctx.pages.iter().flat_map(|p| &p.tracks).take(3) {
+                    if let Ok(su) = SpotifyUri::from_uri(t.uri()) {
+                        match librespot::metadata::Track::get(&session, &su).await {
+                            Ok(tr) => {
+                                let artists: Vec<_> =
+                                    tr.artists.0.iter().map(|a| a.name.clone()).collect();
+                                let cover = tr
+                                    .album
+                                    .covers
+                                    .0
+                                    .first()
+                                    .and_then(|i| i.id.to_base16().ok());
+                                println!(
+                                    "    {} — {} [{}] cover={:?}",
+                                    tr.name,
+                                    artists.join(", "),
+                                    tr.album.name,
+                                    cover
+                                );
+                            }
+                            Err(e) => println!("    {} metadata err: {e}", t.uri()),
+                        }
+                    }
+                }
+            }
+            Err(e) => println!("\n{pl}\n  get_context error: {e}"),
         }
     }
     Ok(())

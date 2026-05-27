@@ -1481,10 +1481,12 @@ impl App {
 
     fn spawn_open_playlist(&mut self, id: String, name: String, mode: OpenMode) {
         self.status = format!("Loading playlist “{name}”…");
-        let spotify = self.spotify.clone();
+        // Resolved over the playback session: the Web API playlist endpoints are
+        // 403 for development-mode apps since 2026.
+        let session = self.player.session();
         let tx = self.updates_tx.clone();
         tokio::spawn(async move {
-            let msg = match spotify.playlist_tracks(&id).await {
+            let msg = match crate::browse::playlist_tracks(&session, &id).await {
                 Ok(tracks) => Update::Tracks { title: name, tracks, mode },
                 Err(e) => Update::Error(e.to_string()),
             };
