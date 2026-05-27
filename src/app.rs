@@ -99,6 +99,8 @@ pub struct App {
     snapshot_tx: Option<tokio::sync::watch::Sender<crate::snapshot::Snapshot>>,
 
     pub view: View,
+    /// The view a track list was opened from, so Esc can go back to it.
+    prev_view: View,
     pub focus: Focus,
     pub should_quit: bool,
     pub status: String,
@@ -247,6 +249,7 @@ impl App {
             control_rx: None,
             snapshot_tx: None,
             view: View::Search,
+            prev_view: View::Library,
             focus: Focus::Input,
             should_quit: false,
             status: "Welcome to SpoTUIfy — press ? for help".to_string(),
@@ -431,6 +434,12 @@ impl App {
         }
         if self.prompt.is_some() {
             return self.handle_prompt_key(key);
+        }
+
+        // Esc in the track list goes back to where it was opened from.
+        if key.code == KeyCode::Esc && self.view == View::Tracklist {
+            self.view = self.prev_view;
+            return;
         }
 
         // The Settings view edits values with arrows/Enter; consume those here,
@@ -824,6 +833,10 @@ impl App {
     // ---- Actions -----------------------------------------------------------
 
     fn activate_selection(&mut self) {
+        // Remember where a track list is opened from, so Esc can return there.
+        if matches!(self.view, View::Library | View::Search) {
+            self.prev_view = self.view;
+        }
         match self.view {
             View::Search => self.activate_search_selection(),
             View::Library => self.activate_library_selection(),

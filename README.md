@@ -82,6 +82,7 @@ All bindings are configurable via the `[keys]` table (see below). Defaults:
 | `↑`/`↓` or `k`/`j` · `g`/`G` | Move selection · jump to top/bottom |
 | `Enter` | Play the item, or open the album/artist/playlist/show |
 | `e` · `A` | Enqueue the selected track · open its artist's discography |
+| `Esc` | In Tracks: go back to where you opened it; in filter: clear the filter |
 | `Space` · `n` / `b` | Play/pause · next / previous |
 | `[` / `]` · `+` / `-` | Seek ∓5s · volume up/down |
 | `s` · `r` | Toggle shuffle · cycle repeat (off→all→one) |
