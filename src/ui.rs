@@ -97,13 +97,14 @@ fn render_help(f: &mut Frame, app: &App, area: Rect) {
 
 fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
     let theme = app.theme;
-    let titles = ["1 Search", "2 Library", "3 Tracks", "4 Queue", "5 Output"];
+    let titles = ["1 Search", "2 Library", "3 Tracks", "4 Queue", "5 Output", "6 Settings"];
     let selected = match app.view {
         View::Search => 0,
         View::Library => 1,
         View::Tracklist => 2,
         View::Queue => 3,
         View::Devices => 4,
+        View::Settings => 5,
     };
     let tabs = Tabs::new(titles.iter().map(|t| Span::raw(*t)).collect::<Vec<_>>())
         .select(selected)
@@ -120,6 +121,7 @@ fn render_main(f: &mut Frame, app: &mut App, area: Rect) {
         View::Tracklist => render_tracklist(f, app, area),
         View::Queue => render_queue(f, app, area),
         View::Devices => render_devices(f, app, area),
+        View::Settings => render_settings(f, app, area),
     }
 }
 
@@ -551,6 +553,91 @@ fn render_equalizer(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(Text::from(lines)), inner);
 }
 
+fn render_settings(f: &mut Frame, app: &App, area: Rect) {
+    use crate::app::SettingRow;
+    use crate::eq::{LABELS, MAX_DB};
+    let theme = app.theme;
+    let eq = app.player.eq();
+    let rows = SettingRow::all();
+
+    let header = |label: &str| {
+        Line::from(Span::styled(
+            format!(" {label}"),
+            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+        ))
+    };
+
+    let mut lines: Vec<Line> = vec![header("Playback")];
+    for (i, row) in rows.iter().enumerate() {
+        match row {
+            SettingRow::EqBand(0) => {
+                lines.push(Line::from(""));
+                lines.push(header("Equalizer"));
+            }
+            SettingRow::ArtMode => {
+                lines.push(Line::from(""));
+                lines.push(header("Appearance"));
+            }
+            SettingRow::ReAuth => {
+                lines.push(Line::from(""));
+                lines.push(header("Account"));
+                lines.push(Line::from(Span::styled(
+                    format!("   logged in as {}", app.player.username()),
+                    Style::default().fg(theme.dim),
+                )));
+            }
+            _ => {}
+        }
+
+        let (label, value) = match *row {
+            SettingRow::Normalisation => {
+                ("Normalisation".to_string(), on_off(app.config.normalisation).to_string())
+            }
+            SettingRow::EqEnabled => ("Equalizer".to_string(), on_off(eq.enabled()).to_string()),
+            SettingRow::Volume => ("Volume".to_string(), format!("{}%", app.player.volume_percent())),
+            SettingRow::EqBand(b) => {
+                let g = eq.gain(b);
+                let bar: String = (-MAX_DB..=MAX_DB)
+                    .map(|c| {
+                        if c == 0 {
+                            '│'
+                        } else if (c > 0 && c <= g) || (c < 0 && c >= g) {
+                            '█'
+                        } else {
+                            '·'
+                        }
+                    })
+                    .collect();
+                (format!("{:>3} Hz", LABELS[b]), format!("{g:+3} dB  {bar}"))
+            }
+            SettingRow::ArtMode => {
+                ("Album art".to_string(), format!("{:?}", app.config.art_mode).to_lowercase())
+            }
+            SettingRow::ReAuth => ("Re-authenticate".to_string(), "press Enter".to_string()),
+        };
+
+        let selected = i == app.settings_sel;
+        let marker = if selected { "▶ " } else { "  " };
+        let label_style = if selected {
+            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        let value_style = if selected {
+            Style::default().fg(theme.accent)
+        } else {
+            Style::default().fg(theme.dim)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {marker}{label:<14}"), label_style),
+            Span::styled(value, value_style),
+        ]));
+    }
+
+    let block = panel(theme, " Settings · ↑↓ select · ←→ change · Enter toggle/reset ");
+    f.render_widget(Paragraph::new(Text::from(lines)).block(block), area);
+}
+
 // ---- small helpers --------------------------------------------------------
 
 /// Append a `· Filter: …` suffix to a panel title when filtering is active.
@@ -567,6 +654,14 @@ fn section_header(theme: Theme, label: &str) -> ListItem<'static> {
         label.to_string(),
         Style::default().fg(theme.dim).add_modifier(Modifier::BOLD),
     )))
+}
+
+fn on_off(b: bool) -> &'static str {
+    if b {
+        "on"
+    } else {
+        "off"
+    }
 }
 
 fn panel(theme: Theme, title: impl Into<String>) -> Block<'static> {

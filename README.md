@@ -75,7 +75,7 @@ All bindings are configurable via the `[keys]` table (see below). Defaults:
 
 | Key | Action |
 | --- | --- |
-| `1`–`5` | Switch to Search / Library / Tracks / Queue / Output |
+| `1`–`6` | Switch to Search / Library / Tracks / Queue / Output / Settings |
 | `Tab` / `Shift+Tab` | Next / previous tab · (in search box) cycle result type |
 | `/` | Filter the current list; in Search, focus the query box |
 | `i` | Focus the search box (`↑`/`↓` recall search history) |
@@ -104,7 +104,10 @@ In the **equalizer** overlay: `←`/`→` select a band, `↑`/`↓` adjust its 
 - **Time-synced lyrics** (`y`) — scrolling, line-highlighted, with a plain-text
   fallback for unsynced lyrics.
 - **10-band graphic equalizer** (`E`) — peaking-filter EQ applied in the audio
-  path, adjustable live and persisted.
+  path, adjustable live and persisted. Also editable in the Settings tab.
+- **Settings tab** (`6`) — toggle normalisation/EQ, set volume, tune the EQ
+  bands, change album-art mode, and sign out / re-authenticate. `↑↓` select,
+  `←→` change, `Enter` toggles or resets.
 - **Output selection** — pick a local audio device, or **transfer playback** to
   a Spotify Connect device (phone/speaker) and control it remotely.
 - **Podcasts** — search and play episodes alongside music.

@@ -379,9 +379,29 @@ impl Player {
     // ---- Output device -----------------------------------------------------
 
     /// Switch the audio output device, rebuilding the player and resuming the
-    /// current track at its current position. Returns the device name now set.
+    /// current track at its current position.
     pub fn set_output_device(&mut self, device: Option<String>) -> Result<()> {
         self.device = device;
+        self.rebuild_and_resume()
+    }
+
+    /// Toggle loudness normalisation, rebuilding the player to apply it.
+    pub fn set_normalisation(&mut self, on: bool) -> Result<()> {
+        if self.player_config.normalisation == on {
+            return Ok(());
+        }
+        self.player_config.normalisation = on;
+        self.rebuild_and_resume()
+    }
+
+    /// The signed-in Spotify username (for display).
+    pub fn username(&self) -> String {
+        self.session.username()
+    }
+
+    /// Rebuild the librespot player and resume the current track at its
+    /// position (used when backend/device/normalisation change).
+    fn rebuild_and_resume(&mut self) -> Result<()> {
         let resume_at = self.interpolated_position();
         let resume = self.current_id.clone();
         let was_playing = matches!(self.status, Status::Playing | Status::Loading);

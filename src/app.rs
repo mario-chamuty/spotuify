@@ -36,6 +36,29 @@ pub enum View {
     Tracklist,
     Queue,
     Devices,
+    Settings,
+}
+
+/// One adjustable row in the Settings view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingRow {
+    Normalisation,
+    EqEnabled,
+    Volume,
+    EqBand(usize),
+    ArtMode,
+    ReAuth,
+}
+
+impl SettingRow {
+    /// All rows in display order.
+    pub fn all() -> Vec<SettingRow> {
+        let mut v = vec![SettingRow::Normalisation, SettingRow::EqEnabled, SettingRow::Volume];
+        v.extend((0..crate::eq::BANDS).map(SettingRow::EqBand));
+        v.push(SettingRow::ArtMode);
+        v.push(SettingRow::ReAuth);
+        v
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,6 +167,9 @@ pub struct App {
 
     /// Help modal (`?`): lists every keybinding.
     pub help_open: bool,
+
+    /// Selected row in the Settings view (index into `SettingRow::all()`).
+    pub settings_sel: usize,
 }
 
 /// A decoded album cover bound to a terminal pixel-graphics protocol.
@@ -243,6 +269,7 @@ impl App {
             eq_open: false,
             eq_sel: 0,
             help_open: false,
+            settings_sel: 0,
         };
         // Reflect a restored now-playing track in the queue selection.
         if let Some(i) = app.player.current {
@@ -384,6 +411,12 @@ impl App {
             return self.handle_prompt_key(key);
         }
 
+        // The Settings view edits values with arrows/Enter; consume those here,
+        // letting everything else (global controls, tab switches) fall through.
+        if self.view == View::Settings && self.handle_settings_key(key) {
+            return;
+        }
+
         // Resolve the chord to an action via the (configurable) keymap.
         let Some(action) = self.keymap.action(key.code, key.modifiers) else {
             return;
@@ -416,6 +449,7 @@ impl App {
             Action::TabTracks => self.view = View::Tracklist,
             Action::TabQueue => self.view = View::Queue,
             Action::TabDevices => self.goto_devices(),
+            Action::TabSettings => self.view = View::Settings,
             Action::CycleTab => self.cycle_view(),
             Action::Help => self.show_help(),
             Action::FocusSearch => {
@@ -512,14 +546,16 @@ impl App {
             View::Library => View::Tracklist,
             View::Tracklist => View::Queue,
             View::Queue => View::Devices,
-            View::Devices => View::Search,
+            View::Devices => View::Settings,
+            View::Settings => View::Search,
         };
         self.on_view_entered();
     }
 
     fn cycle_view_back(&mut self) {
         self.view = match self.view {
-            View::Search => View::Devices,
+            View::Search => View::Settings,
+            View::Settings => View::Devices,
             View::Devices => View::Queue,
             View::Queue => View::Tracklist,
             View::Tracklist => View::Library,
@@ -614,6 +650,7 @@ impl App {
                 }
             }
             View::Devices => self.device_rows().len(),
+            View::Settings => SettingRow::all().len(),
         }
     }
 
@@ -624,6 +661,8 @@ impl App {
             View::Tracklist => &mut self.tracklist_state,
             View::Queue => &mut self.queue_state,
             View::Devices => &mut self.device_state,
+            // Settings has its own (arrow-driven) navigation; never uses this.
+            View::Settings => &mut self.library_state,
         }
     }
 
@@ -784,6 +823,7 @@ impl App {
                 }
             }
             View::Devices => self.activate_device_selection(),
+            View::Settings => {} // handled by handle_settings_key
         }
     }
 
@@ -1147,7 +1187,7 @@ impl App {
                 v
             }
             View::Devices => self.devices.iter().map(|d| d.name.clone()).collect(),
-            View::Search => Vec::new(),
+            View::Search | View::Settings => Vec::new(),
         }
     }
 
@@ -1353,6 +1393,116 @@ impl App {
         self.config.equalizer.gains_db = eq.gains();
         if !self.eq_open {
             let _ = self.config.save();
+        }
+    }
+
+    // ---- Settings view -----------------------------------------------------
+
+    /// Handle a key in the Settings view. Returns `true` if it was consumed
+    /// (arrows/Enter edit settings); other keys fall through to the keymap.
+    fn handle_settings_key(&mut self, key: KeyEvent) -> bool {
+        let rows = SettingRow::all();
+        let len = rows.len();
+        self.settings_sel = self.settings_sel.min(len - 1);
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.settings_sel = self.settings_sel.saturating_sub(1);
+                true
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.settings_sel = (self.settings_sel + 1).min(len - 1);
+                true
+            }
+            KeyCode::Home => {
+                self.settings_sel = 0;
+                true
+            }
+            KeyCode::End => {
+                self.settings_sel = len - 1;
+                true
+            }
+            KeyCode::Left => {
+                self.adjust_setting(rows[self.settings_sel], -1);
+                true
+            }
+            KeyCode::Right => {
+                self.adjust_setting(rows[self.settings_sel], 1);
+                true
+            }
+            KeyCode::Enter => {
+                self.activate_setting(rows[self.settings_sel]);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn adjust_setting(&mut self, row: SettingRow, dir: i32) {
+        match row {
+            SettingRow::Normalisation => self.set_normalisation(!self.config.normalisation),
+            SettingRow::EqEnabled => {
+                let eq = self.player.eq();
+                eq.toggle();
+                self.config.equalizer.enabled = eq.enabled();
+                let _ = self.config.save();
+            }
+            SettingRow::Volume => {
+                self.player.volume_step(dir * VOLUME_STEP);
+                self.config.volume = self.player.volume_percent();
+                let _ = self.config.save();
+            }
+            SettingRow::EqBand(i) => {
+                let eq = self.player.eq();
+                eq.adjust(i, dir);
+                self.config.equalizer.gains_db = eq.gains();
+                let _ = self.config.save();
+            }
+            SettingRow::ArtMode => self.cycle_art_mode(dir),
+            SettingRow::ReAuth => {}
+        }
+    }
+
+    fn activate_setting(&mut self, row: SettingRow) {
+        match row {
+            SettingRow::Normalisation | SettingRow::EqEnabled | SettingRow::ArtMode => {
+                self.adjust_setting(row, 1)
+            }
+            SettingRow::EqBand(i) => {
+                let eq = self.player.eq();
+                eq.adjust(i, -eq.gain(i)); // reset band to 0 dB
+                self.config.equalizer.gains_db = eq.gains();
+                let _ = self.config.save();
+            }
+            SettingRow::Volume => {}
+            SettingRow::ReAuth => self.reauthenticate(),
+        }
+    }
+
+    fn set_normalisation(&mut self, on: bool) {
+        match self.player.set_normalisation(on) {
+            Ok(()) => {
+                self.config.normalisation = on;
+                let _ = self.config.save();
+                self.status = format!("Normalisation {}", on_off(on));
+            }
+            Err(e) => self.status = format!("Normalisation change failed: {e}"),
+        }
+    }
+
+    fn cycle_art_mode(&mut self, dir: i32) {
+        use crate::config::ArtMode::*;
+        let order = [Auto, Halfblocks, Sixel, Kitty];
+        let cur = order.iter().position(|m| *m == self.config.art_mode).unwrap_or(0) as i32;
+        let next = (cur + dir).rem_euclid(order.len() as i32) as usize;
+        self.config.art_mode = order[next];
+        let _ = self.config.save();
+        self.status = "Album-art mode saved — restart to apply.".to_string();
+    }
+
+    fn reauthenticate(&mut self) {
+        match crate::config::clear_credentials() {
+            Ok(()) => self.status = "Signed out — restart SpoTUIfy to log in again.".to_string(),
+            Err(e) => self.status = format!("Sign out failed: {e}"),
         }
     }
 

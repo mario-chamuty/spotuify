@@ -211,3 +211,11 @@ pub fn web_token_path() -> Result<PathBuf> {
 pub fn log_path() -> Result<PathBuf> {
     Ok(cache_dir()?.join("spotuify.log"))
 }
+
+/// Remove cached credentials (web-API token + librespot reusable login) so the
+/// next launch runs the browser sign-in again.
+pub fn clear_credentials() -> Result<()> {
+    let _ = std::fs::remove_file(web_token_path()?);
+    let _ = std::fs::remove_file(librespot_cache_dir()?.join("credentials.json"));
+    Ok(())
+}
