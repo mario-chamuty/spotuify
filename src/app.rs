@@ -39,6 +39,22 @@ pub enum View {
     Settings,
 }
 
+/// A restorable snapshot of a browse view, for the Esc back-stack.
+enum NavSnapshot {
+    Tracklist {
+        title: String,
+        tracks: Vec<Track>,
+        sel: Option<usize>,
+    },
+    Results {
+        input: String,
+        kind: SearchKind,
+        results: SearchResults,
+        sel: Option<usize>,
+    },
+    Tab(View),
+}
+
 /// One adjustable row in the Settings view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingRow {
@@ -99,8 +115,9 @@ pub struct App {
     snapshot_tx: Option<tokio::sync::watch::Sender<crate::snapshot::Snapshot>>,
 
     pub view: View,
-    /// The view a track list was opened from, so Esc can go back to it.
-    prev_view: View,
+    /// Browse history, so Esc walks back through opened contexts
+    /// (e.g. playlist → album → artist → Esc → album → Esc → playlist).
+    nav_stack: Vec<NavSnapshot>,
     pub focus: Focus,
     pub should_quit: bool,
     pub status: String,
@@ -249,7 +266,7 @@ impl App {
             control_rx: None,
             snapshot_tx: None,
             view: View::Search,
-            prev_view: View::Library,
+            nav_stack: Vec::new(),
             focus: Focus::Input,
             should_quit: false,
             status: "Welcome to SpoTUIfy — press ? for help".to_string(),
@@ -436,9 +453,12 @@ impl App {
             return self.handle_prompt_key(key);
         }
 
-        // Esc in the track list goes back to where it was opened from.
-        if key.code == KeyCode::Esc && self.view == View::Tracklist {
-            self.view = self.prev_view;
+        // Esc walks back through opened contexts.
+        if key.code == KeyCode::Esc
+            && matches!(self.view, View::Tracklist | View::Search)
+            && !self.nav_stack.is_empty()
+        {
+            self.nav_back();
             return;
         }
 
@@ -509,6 +529,7 @@ impl App {
             }
             Action::Activate => self.activate_selection(),
             Action::Enqueue => self.enqueue_selection(),
+            Action::OpenAlbum => self.open_album_from_selection(),
             Action::ToggleLike => self.toggle_like_selection(),
             Action::AddToPlaylist => self.open_add_to_playlist(),
             Action::ToggleLyrics => {
@@ -547,6 +568,17 @@ impl App {
         match artist {
             Some((id, name)) => self.spawn_open_artist(id, name),
             None => self.status = "No artist info for this item.".to_string(),
+        }
+    }
+
+    fn open_album_from_selection(&mut self) {
+        let album = self
+            .selected_track()
+            .or_else(|| self.player.current_track())
+            .and_then(|t| t.album_id.clone().map(|id| (id, t.album.clone())));
+        match album {
+            Some((id, name)) => self.spawn_open_album(id, name, OpenMode::Show),
+            None => self.status = "No album info for this item.".to_string(),
         }
     }
 
@@ -832,11 +864,55 @@ impl App {
 
     // ---- Actions -----------------------------------------------------------
 
-    fn activate_selection(&mut self) {
-        // Remember where a track list is opened from, so Esc can return there.
-        if matches!(self.view, View::Library | View::Search) {
-            self.prev_view = self.view;
+    /// Snapshot the current browse view onto the back-stack before opening a
+    /// new context, so Esc can return to it.
+    fn push_nav(&mut self) {
+        let snap = match self.view {
+            View::Tracklist if !self.context_tracks.is_empty() => NavSnapshot::Tracklist {
+                title: self.context_title.clone(),
+                tracks: self.context_tracks.clone(),
+                sel: self.tracklist_state.selected(),
+            },
+            View::Search => match &self.search_results {
+                Some(results) => NavSnapshot::Results {
+                    input: self.search_input.clone(),
+                    kind: self.search_kind,
+                    results: results.clone(),
+                    sel: self.search_state.selected(),
+                },
+                None => NavSnapshot::Tab(View::Search),
+            },
+            other => NavSnapshot::Tab(other),
+        };
+        self.nav_stack.push(snap);
+        if self.nav_stack.len() > 32 {
+            self.nav_stack.remove(0);
         }
+    }
+
+    /// Pop the back-stack and restore that browse view.
+    fn nav_back(&mut self) {
+        self.filter_query.clear();
+        match self.nav_stack.pop() {
+            Some(NavSnapshot::Tracklist { title, tracks, sel }) => {
+                self.context_title = title;
+                self.context_tracks = tracks;
+                self.tracklist_state.select(sel);
+                self.view = View::Tracklist;
+            }
+            Some(NavSnapshot::Results { input, kind, results, sel }) => {
+                self.search_input = input;
+                self.search_kind = kind;
+                self.search_results = Some(results);
+                self.search_state.select(sel);
+                self.view = View::Search;
+            }
+            Some(NavSnapshot::Tab(v)) => self.view = v,
+            None => self.view = View::Library,
+        }
+    }
+
+    fn activate_selection(&mut self) {
         match self.view {
             View::Search => self.activate_search_selection(),
             View::Library => self.activate_library_selection(),
@@ -907,6 +983,7 @@ impl App {
                         duration_ms: e.duration_ms,
                         kind: crate::model::PlayableKind::Episode,
                         artist: None,
+                        album_id: None,
                     })
                     .collect();
                 self.player.play_tracks(tracks, i);
@@ -984,7 +1061,7 @@ impl App {
         let tx = self.updates_tx.clone();
         tokio::spawn(async move {
             if let Err(e) = spotify.transfer_playback(&id, true).await {
-                let _ = tx.send(Update::Error(e.to_string()));
+                let _ = tx.send(Update::Error(format!("{e:#}")));
             }
         });
     }
@@ -1032,7 +1109,7 @@ impl App {
                     spotify.remote_pause(&id).await
                 };
                 if let Err(e) = res {
-                    let _ = tx.send(Update::Error(e.to_string()));
+                    let _ = tx.send(Update::Error(format!("{e:#}")));
                 }
             });
         } else {
@@ -1097,7 +1174,7 @@ impl App {
         let tx = self.updates_tx.clone();
         tokio::spawn(async move {
             if let Err(e) = f(spotify).await {
-                let _ = tx.send(Update::Error(e.to_string()));
+                let _ = tx.send(Update::Error(format!("{e:#}")));
             }
         });
     }
@@ -1292,7 +1369,7 @@ impl App {
                 spotify.like_track(&id).await
             };
             if let Err(e) = res {
-                let _ = tx.send(Update::Error(e.to_string()));
+                let _ = tx.send(Update::Error(format!("{e:#}")));
             }
         });
     }
@@ -1357,7 +1434,7 @@ impl App {
                     }
                 }
                 Err(e) => {
-                    let _ = tx.send(Update::Error(e.to_string()));
+                    let _ = tx.send(Update::Error(format!("{e:#}")));
                 }
             }
         });
@@ -1752,6 +1829,7 @@ impl App {
     }
 
     fn spawn_liked(&mut self) {
+        self.push_nav();
         self.status = "Loading Liked Songs…".to_string();
         let spotify = self.spotify.clone();
         let tx = self.updates_tx.clone();
@@ -1762,13 +1840,14 @@ impl App {
                     tracks,
                     mode: OpenMode::Show,
                 },
-                Err(e) => Update::Error(e.to_string()),
+                Err(e) => Update::Error(format!("{e:#}")),
             };
             let _ = tx.send(msg);
         });
     }
 
     fn spawn_open_playlist(&mut self, id: String, name: String, mode: OpenMode) {
+        self.push_nav();
         self.status = format!("Loading playlist “{name}”…");
         // Resolved over the playback session: the Web API playlist endpoints are
         // 403 for development-mode apps since 2026.
@@ -1777,39 +1856,42 @@ impl App {
         tokio::spawn(async move {
             let msg = match crate::browse::playlist_tracks(&session, &id).await {
                 Ok(tracks) => Update::Tracks { title: name, tracks, mode },
-                Err(e) => Update::Error(e.to_string()),
+                Err(e) => Update::Error(format!("{e:#}")),
             };
             let _ = tx.send(msg);
         });
     }
 
     fn spawn_open_album(&mut self, id: String, name: String, mode: OpenMode) {
+        self.push_nav();
         self.status = format!("Loading album “{name}”…");
         let spotify = self.spotify.clone();
         let tx = self.updates_tx.clone();
         tokio::spawn(async move {
             let msg = match spotify.album_tracks(&id).await {
                 Ok(tracks) => Update::Tracks { title: name, tracks, mode },
-                Err(e) => Update::Error(e.to_string()),
+                Err(e) => Update::Error(format!("{e:#}")),
             };
             let _ = tx.send(msg);
         });
     }
 
     fn spawn_open_artist(&mut self, id: String, name: String) {
+        self.push_nav();
         self.status = format!("Loading “{name}” albums…");
         let spotify = self.spotify.clone();
         let tx = self.updates_tx.clone();
         tokio::spawn(async move {
             let msg = match spotify.artist_albums(&id).await {
                 Ok(albums) => Update::Search(SearchResults::Albums(albums)),
-                Err(e) => Update::Error(e.to_string()),
+                Err(e) => Update::Error(format!("{e:#}")),
             };
             let _ = tx.send(msg);
         });
     }
 
     fn spawn_open_show(&mut self, id: String, name: String) {
+        self.push_nav();
         self.status = format!("Loading podcast “{name}”…");
         let spotify = self.spotify.clone();
         let tx = self.updates_tx.clone();
@@ -1820,7 +1902,7 @@ impl App {
                     tracks,
                     mode: OpenMode::Show,
                 },
-                Err(e) => Update::Error(e.to_string()),
+                Err(e) => Update::Error(format!("{e:#}")),
             };
             let _ = tx.send(msg);
         });
@@ -1838,7 +1920,7 @@ impl App {
                     }
                 }
                 Err(e) => {
-                    let _ = tx.send(Update::Error(e.to_string()));
+                    let _ = tx.send(Update::Error(format!("{e:#}")));
                 }
             }
         });
@@ -1856,7 +1938,7 @@ impl App {
                     }
                 }
                 Err(e) => {
-                    let _ = tx.send(Update::Error(e.to_string()));
+                    let _ = tx.send(Update::Error(format!("{e:#}")));
                 }
             }
         });
@@ -1868,7 +1950,7 @@ impl App {
         let tx = self.updates_tx.clone();
         tokio::spawn(async move {
             if let Err(e) = spotify.add_to_playlist(&playlist_id, &track_uri).await {
-                let _ = tx.send(Update::Error(e.to_string()));
+                let _ = tx.send(Update::Error(format!("{e:#}")));
             }
         });
     }

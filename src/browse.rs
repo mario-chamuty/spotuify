@@ -84,6 +84,7 @@ async fn fetch_track(session: &Session, uri: &str) -> Option<Track> {
             .and_then(|s| s.to_base62().ok())
             .map(|id| (id, a.name.clone()))
     });
+    let album_id = SpotifyId::try_from(&t.album.id).ok().and_then(|s| s.to_base62().ok());
 
     Some(Track {
         uri: uri.to_string(),
@@ -94,5 +95,6 @@ async fn fetch_track(session: &Session, uri: &str) -> Option<Track> {
         duration_ms: t.duration.max(0) as u32,
         kind: PlayableKind::Track,
         artist,
+        album_id,
     })
 }

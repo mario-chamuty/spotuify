@@ -301,7 +301,7 @@ impl Spotify {
             tracks.extend(
                 page.items
                     .into_iter()
-                    .filter_map(|t| album_track(t, &album_name, &cover)),
+                    .filter_map(|t| album_track(t, &album_name, &id, &cover)),
             );
             offset += got;
             if got == 0 || page.next.is_none() {
@@ -382,6 +382,7 @@ impl Spotify {
                         duration_ms: e.duration_ms,
                         kind: PlayableKind::Episode,
                         artist: None,
+                        album_id: None,
                     });
                 }
             }
@@ -766,6 +767,8 @@ struct RawNamed {
 struct RawAlbumObj {
     name: String,
     #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
     images: Vec<RawImage>,
 }
 
@@ -812,6 +815,7 @@ fn raw_to_track(p: RawPlayable) -> Option<Track> {
             duration_ms,
             kind: PlayableKind::Episode,
             artist: None,
+            album_id: None,
         })
     } else {
         let artists = p
@@ -831,6 +835,7 @@ fn raw_to_track(p: RawPlayable) -> Option<Track> {
             duration_ms,
             kind: PlayableKind::Track,
             artist: primary_artist(&p.artists),
+            album_id: p.album.as_ref().and_then(|a| a.id.clone()),
         })
     }
 }
@@ -910,7 +915,7 @@ struct RawAlbumTrack {
     duration_ms: u32,
 }
 
-fn album_track(t: RawAlbumTrack, album: &str, cover: &Option<String>) -> Option<Track> {
+fn album_track(t: RawAlbumTrack, album: &str, album_id: &str, cover: &Option<String>) -> Option<Track> {
     let uri = t.uri?;
     Some(Track {
         uri,
@@ -926,6 +931,7 @@ fn album_track(t: RawAlbumTrack, album: &str, cover: &Option<String>) -> Option<
         duration_ms: t.duration_ms,
         kind: PlayableKind::Track,
         artist: primary_artist(&t.artists),
+        album_id: Some(album_id.to_string()),
     })
 }
 

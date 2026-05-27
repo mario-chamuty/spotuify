@@ -29,6 +29,9 @@ pub struct Track {
     /// Primary artist `(id, name)` when known — used to open the artist.
     #[serde(default)]
     pub artist: Option<(String, String)>,
+    /// Album id when known — used to open the album.
+    #[serde(default)]
+    pub album_id: Option<String>,
 }
 
 fn default_kind() -> PlayableKind {
