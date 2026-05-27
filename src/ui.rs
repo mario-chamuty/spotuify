@@ -51,7 +51,46 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.help_open {
         render_help(f, app, f.area());
     }
+    render_six_seven(f, root[2], app);
     let _ = theme;
+}
+
+/// The bouncing six-seven hands: a 2-line overlay just above the volume, with
+/// the two 🫴 hands swapping between the upper and lower line (real up/down,
+/// since a single line can't raise an emoji).
+fn render_six_seven(f: &mut Frame, bar: Rect, app: &App) {
+    let at = match app.easter_egg {
+        Some((crate::app::Egg::SixSeven, at))
+            if at.elapsed() < std::time::Duration::from_secs(2) =>
+        {
+            at
+        }
+        _ => return,
+    };
+    let w = 6u16;
+    if bar.y < 2 || bar.width < w + 2 {
+        return;
+    }
+    // Float the box just above the bar, roughly over the "vol" readout.
+    let rect = Rect {
+        x: bar.x + 13,
+        y: bar.y - 2,
+        width: w,
+        height: 2,
+    };
+    f.render_widget(Clear, rect);
+    // Swap which hand is up ~6×/sec.
+    let (top, bottom) = if (at.elapsed().as_millis() / 150) % 2 == 0 {
+        ("🫴", "    🫴")
+    } else {
+        ("    🫴", "🫴")
+    };
+    let style = Style::default().fg(app.theme.accent);
+    let lines = vec![
+        Line::from(Span::styled(top, style)),
+        Line::from(Span::styled(bottom, style)),
+    ];
+    f.render_widget(Paragraph::new(Text::from(lines)), rect);
 }
 
 /// Modal listing every keybinding (two columns so they all fit). Dismissed by
@@ -435,12 +474,9 @@ fn render_playback_bar(f: &mut Frame, app: &App, area: Rect) {
     let egg = match app.easter_egg {
         Some((egg, at)) if at.elapsed() < std::time::Duration::from_secs(2) => match egg {
             crate::app::Egg::Nice => " *nice*".to_string(),
-            crate::app::Egg::SixSeven => {
-                // Bounce: each palm-up hand dips down (🫳) in turn → up/down motion.
-                const FRAMES: [&str; 4] = ["🫴🫳", "🫴🫴", "🫳🫴", "🫴🫴"];
-                let frame = FRAMES[(at.elapsed().as_millis() / 180) as usize % FRAMES.len()];
-                format!(" six seveeeen {frame}")
-            }
+            // The bouncing 🫴🫴 hands are drawn as a 2-line overlay (see
+            // `render_six_seven`), since a single line can't move them up/down.
+            crate::app::Egg::SixSeven => " six seveeeen".to_string(),
         },
         _ => String::new(),
     };
