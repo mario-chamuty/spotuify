@@ -411,6 +411,7 @@ impl Spotify {
                         album_art_url: best_image_raw(&e.images).or_else(|| cover.clone()),
                         duration_ms: e.duration_ms,
                         kind: PlayableKind::Episode,
+                        artist: None,
                     });
                 }
             }
@@ -789,6 +790,8 @@ struct RawPlayable {
 #[derive(serde::Deserialize)]
 struct RawNamed {
     name: String,
+    #[serde(default)]
+    id: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -840,6 +843,7 @@ fn raw_to_track(p: RawPlayable) -> Option<Track> {
             album_art_url: art,
             duration_ms,
             kind: PlayableKind::Episode,
+            artist: None,
         })
     } else {
         let artists = p
@@ -858,8 +862,16 @@ fn raw_to_track(p: RawPlayable) -> Option<Track> {
             album_art_url: art,
             duration_ms,
             kind: PlayableKind::Track,
+            artist: primary_artist(&p.artists),
         })
     }
+}
+
+/// The first artist with a known id, as `(id, name)`.
+fn primary_artist(artists: &[RawNamed]) -> Option<(String, String)> {
+    artists
+        .iter()
+        .find_map(|a| a.id.as_ref().map(|id| (id.clone(), a.name.clone())))
 }
 
 // ---- Search result objects --------------------------------------------------
@@ -945,6 +957,7 @@ fn album_track(t: RawAlbumTrack, album: &str, cover: &Option<String>) -> Option<
         album_art_url: cover.clone(),
         duration_ms: t.duration_ms,
         kind: PlayableKind::Track,
+        artist: primary_artist(&t.artists),
     })
 }
 

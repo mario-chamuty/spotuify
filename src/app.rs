@@ -141,6 +141,9 @@ pub struct App {
     // Equalizer overlay.
     pub eq_open: bool,
     pub eq_sel: usize,
+
+    /// Help modal (`?`): lists every keybinding.
+    pub help_open: bool,
 }
 
 /// A decoded album cover bound to a terminal pixel-graphics protocol.
@@ -239,6 +242,7 @@ impl App {
             lyrics_pending: None,
             eq_open: false,
             eq_sel: 0,
+            help_open: false,
         };
         // Reflect a restored now-playing track in the queue selection.
         if let Some(i) = app.player.current {
@@ -363,6 +367,11 @@ impl App {
             Focus::List => {}
         }
 
+        // The help modal is dismissed by any key.
+        if self.help_open {
+            self.help_open = false;
+            return;
+        }
         // Modal overlays capture keys before any keybinding resolution.
         if self.eq_open {
             return self.handle_eq_key(key);
@@ -450,12 +459,26 @@ impl App {
             Action::CreatePlaylist => self.prompt_create_playlist(),
             Action::RenamePlaylist => self.prompt_rename_playlist(),
             Action::DeletePlaylist => self.delete_selected_playlist(),
+            Action::CycleTabBack => self.cycle_view_back(),
+            Action::OpenArtist => self.open_artist_from_selection(),
         }
     }
 
     fn show_help(&mut self) {
-        self.status =
-            "[1-5] tabs · Tab cycle · Enter play/open · e enqueue · / filter · L like · a add-to-playlist · space pause · n/b next/prev · +/- vol · [ ] seek · s shuffle · r repeat · q quit".to_string();
+        self.help_open = true;
+    }
+
+    /// Open the artist of the selected (or now-playing) track, if it has a
+    /// known artist id.
+    fn open_artist_from_selection(&mut self) {
+        let artist = self
+            .selected_track()
+            .or_else(|| self.player.current_track())
+            .and_then(|t| t.artist.clone());
+        match artist {
+            Some((id, name)) => self.spawn_open_artist(id, name),
+            None => self.status = "No artist info for this item.".to_string(),
+        }
     }
 
     fn handle_input_key(&mut self, key: KeyEvent) {
@@ -491,6 +514,22 @@ impl App {
             View::Queue => View::Devices,
             View::Devices => View::Search,
         };
+        self.on_view_entered();
+    }
+
+    fn cycle_view_back(&mut self) {
+        self.view = match self.view {
+            View::Search => View::Devices,
+            View::Devices => View::Queue,
+            View::Queue => View::Tracklist,
+            View::Tracklist => View::Library,
+            View::Library => View::Search,
+        };
+        self.on_view_entered();
+    }
+
+    /// Side effects when a view becomes active (lazy data loads).
+    fn on_view_entered(&mut self) {
         if self.view == View::Library {
             self.goto_library();
         } else if self.view == View::Devices {
@@ -788,6 +827,7 @@ impl App {
                         album_art_url: e.album_art_url.clone(),
                         duration_ms: e.duration_ms,
                         kind: crate::model::PlayableKind::Episode,
+                        artist: None,
                     })
                     .collect();
                 self.player.play_tracks(tracks, i);
@@ -1118,6 +1158,26 @@ impl App {
             self.filter_map.get(visible).copied()
         } else {
             Some(visible)
+        }
+    }
+
+    /// The track highlighted in the current view, if the view holds tracks.
+    fn selected_track(&self) -> Option<&Track> {
+        match self.view {
+            View::Search => match self.search_results.as_ref()? {
+                SearchResults::Tracks(tracks) => {
+                    tracks.get(self.resolve_index(self.search_state.selected()?)?)
+                }
+                _ => None,
+            },
+            View::Tracklist => self
+                .context_tracks
+                .get(self.resolve_index(self.tracklist_state.selected()?)?),
+            View::Queue => self
+                .player
+                .queue
+                .get(self.resolve_index(self.queue_state.selected()?)?),
+            _ => None,
         }
     }
 

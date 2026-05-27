@@ -26,6 +26,9 @@ pub struct Track {
     pub duration_ms: u32,
     #[serde(default = "default_kind")]
     pub kind: PlayableKind,
+    /// Primary artist `(id, name)` when known — used to open the artist.
+    #[serde(default)]
+    pub artist: Option<(String, String)>,
 }
 
 fn default_kind() -> PlayableKind {

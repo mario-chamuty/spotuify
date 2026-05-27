@@ -76,19 +76,19 @@ All bindings are configurable via the `[keys]` table (see below). Defaults:
 | Key | Action |
 | --- | --- |
 | `1`–`5` | Switch to Search / Library / Tracks / Queue / Output |
-| `Tab` | Cycle tabs · (in search box) cycle result type |
+| `Tab` / `Shift+Tab` | Next / previous tab · (in search box) cycle result type |
 | `/` | Filter the current list; in Search, focus the query box |
 | `i` | Focus the search box (`↑`/`↓` recall search history) |
 | `↑`/`↓` or `k`/`j` · `g`/`G` | Move selection · jump to top/bottom |
 | `Enter` | Play the item, or open the album/artist/playlist/show |
-| `e` | Enqueue the selected track |
+| `e` · `A` | Enqueue the selected track · open its artist's discography |
 | `Space` · `n` / `b` | Play/pause · next / previous |
 | `[` / `]` · `+` / `-` | Seek ∓5s · volume up/down |
 | `s` · `r` | Toggle shuffle · cycle repeat (off→all→one) |
 | `L` · `a` | Like/unlike track · add track to a playlist |
 | `c` / `R` / `D` | Create / rename / remove a playlist (Library) |
 | `y` · `E` | Toggle the lyrics panel · open the equalizer |
-| `?` · `q` / `Ctrl-C` | Help · quit |
+| `?` · `q` / `Ctrl-C` | Show all keybindings (modal) · quit |
 
 In the **equalizer** overlay: `←`/`→` select a band, `↑`/`↓` adjust its gain,
 `0` reset the band, `R` flatten all, `space` toggle EQ on/off, `Esc` close.

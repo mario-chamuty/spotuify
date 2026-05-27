@@ -48,7 +48,51 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.eq_open {
         render_equalizer(f, app, f.area());
     }
+    if app.help_open {
+        render_help(f, app, f.area());
+    }
     let _ = theme;
+}
+
+/// Modal listing every keybinding (two columns so they all fit). Dismissed by
+/// any key.
+fn render_help(f: &mut Frame, app: &App, area: Rect) {
+    let theme = app.theme;
+    let rows = app.keymap.help_rows();
+    let half = rows.len().div_ceil(2);
+    let (left, right) = rows.split_at(half);
+
+    let height = (half as u16 + 2).min(area.height.saturating_sub(2)).max(3);
+    let rect = centered_rect(area, 86, height);
+    f.render_widget(Clear, rect);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.accent))
+        .title(" Keybindings — press any key to close ");
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(inner);
+
+    for (slice, col) in [(left, cols[0]), (right, cols[1])] {
+        let key_w = slice.iter().map(|(k, _)| k.chars().count()).max().unwrap_or(6);
+        let lines: Vec<Line> = slice
+            .iter()
+            .map(|(keys, desc)| {
+                Line::from(vec![
+                    Span::styled(
+                        format!("{keys:>key_w$}  "),
+                        Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled((*desc).to_string(), Style::default().fg(theme.dim)),
+                ])
+            })
+            .collect();
+        f.render_widget(Paragraph::new(Text::from(lines)), col);
+    }
 }
 
 fn render_tabs(f: &mut Frame, app: &App, area: Rect) {

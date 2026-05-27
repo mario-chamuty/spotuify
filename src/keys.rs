@@ -28,6 +28,7 @@ pub enum Action {
     Quit,
     Help,
     CycleTab,
+    CycleTabBack,
     FocusSearch,
     // Tab switches
     TabSearch,
@@ -42,6 +43,7 @@ pub enum Action {
     Bottom,
     Activate,
     Enqueue,
+    OpenArtist,
     // Library writes / filtering
     ToggleLike,
     AddToPlaylist,
@@ -69,6 +71,7 @@ impl Action {
             Action::Quit => "quit",
             Action::Help => "help",
             Action::CycleTab => "cycle-tab",
+            Action::CycleTabBack => "cycle-tab-back",
             Action::FocusSearch => "focus-search",
             Action::TabSearch => "tab-search",
             Action::TabLibrary => "tab-library",
@@ -81,6 +84,7 @@ impl Action {
             Action::Bottom => "bottom",
             Action::Activate => "activate",
             Action::Enqueue => "enqueue",
+            Action::OpenArtist => "open-artist",
             Action::ToggleLike => "toggle-like",
             Action::AddToPlaylist => "add-to-playlist",
             Action::EnterFilter => "enter-filter",
@@ -89,6 +93,46 @@ impl Action {
             Action::DeletePlaylist => "delete-playlist",
             Action::ToggleLyrics => "toggle-lyrics",
             Action::ToggleEqualizer => "toggle-equalizer",
+        }
+    }
+
+    /// Human-readable description for the help modal.
+    pub fn label(self) -> &'static str {
+        match self {
+            Action::PlayPause => "Play / pause",
+            Action::Next => "Next track",
+            Action::Prev => "Previous track",
+            Action::VolumeUp => "Volume up",
+            Action::VolumeDown => "Volume down",
+            Action::SeekForward => "Seek +5s",
+            Action::SeekBack => "Seek -5s",
+            Action::ToggleShuffle => "Toggle shuffle",
+            Action::CycleRepeat => "Cycle repeat (off/all/one)",
+            Action::Quit => "Quit",
+            Action::Help => "This help",
+            Action::CycleTab => "Next tab",
+            Action::CycleTabBack => "Previous tab",
+            Action::FocusSearch => "Focus search box",
+            Action::TabSearch => "Go to Search",
+            Action::TabLibrary => "Go to Library",
+            Action::TabTracks => "Go to Tracks",
+            Action::TabQueue => "Go to Queue",
+            Action::TabDevices => "Go to Output",
+            Action::Up => "Move up",
+            Action::Down => "Move down",
+            Action::Top => "Jump to top",
+            Action::Bottom => "Jump to bottom",
+            Action::Activate => "Play / open selected",
+            Action::Enqueue => "Add selected to queue",
+            Action::OpenArtist => "Open the artist of the selected track",
+            Action::ToggleLike => "Like / unlike selected track",
+            Action::AddToPlaylist => "Add selected track to a playlist",
+            Action::EnterFilter => "Filter the list (search: focus query)",
+            Action::CreatePlaylist => "Create a playlist",
+            Action::RenamePlaylist => "Rename selected playlist",
+            Action::DeletePlaylist => "Remove (unfollow) selected playlist",
+            Action::ToggleLyrics => "Toggle lyrics panel",
+            Action::ToggleEqualizer => "Open the equalizer",
         }
     }
 
@@ -112,6 +156,7 @@ const ALL_ACTIONS: &[Action] = &[
     Action::Quit,
     Action::Help,
     Action::CycleTab,
+    Action::CycleTabBack,
     Action::FocusSearch,
     Action::TabSearch,
     Action::TabLibrary,
@@ -124,6 +169,7 @@ const ALL_ACTIONS: &[Action] = &[
     Action::Bottom,
     Action::Activate,
     Action::Enqueue,
+    Action::OpenArtist,
     Action::ToggleLike,
     Action::AddToPlaylist,
     Action::EnterFilter,
@@ -149,6 +195,7 @@ fn default_bindings() -> Vec<(Action, &'static [&'static str])> {
         (Action::Quit, &["q", "ctrl+c"]),
         (Action::Help, &["?"]),
         (Action::CycleTab, &["tab"]),
+        (Action::CycleTabBack, &["backtab"]),
         (Action::FocusSearch, &["i"]),
         (Action::TabSearch, &["1"]),
         (Action::TabLibrary, &["2"]),
@@ -161,6 +208,7 @@ fn default_bindings() -> Vec<(Action, &'static [&'static str])> {
         (Action::Bottom, &["G", "end"]),
         (Action::Activate, &["enter"]),
         (Action::Enqueue, &["e"]),
+        (Action::OpenArtist, &["A"]),
         (Action::ToggleLike, &["L"]),
         (Action::AddToPlaylist, &["a"]),
         (Action::EnterFilter, &["/"]),
@@ -220,6 +268,60 @@ impl Keymap {
     pub fn action(&self, code: KeyCode, modifiers: KeyModifiers) -> Option<Action> {
         self.map.get(&normalize(code, modifiers)).copied()
     }
+
+    /// `(keys, description)` rows for the help modal, in [`ALL_ACTIONS`] order.
+    pub fn help_rows(&self) -> Vec<(String, &'static str)> {
+        ALL_ACTIONS
+            .iter()
+            .map(|&action| {
+                let mut chords: Vec<Chord> = self
+                    .map
+                    .iter()
+                    .filter(|(_, &a)| a == action)
+                    .map(|(&c, _)| c)
+                    .collect();
+                chords.sort_by_key(|c| format_chord(*c));
+                let keys = if chords.is_empty() {
+                    "—".to_string()
+                } else {
+                    chords.iter().map(|c| format_chord(*c)).collect::<Vec<_>>().join(" / ")
+                };
+                (keys, action.label())
+            })
+            .collect()
+    }
+}
+
+/// Render a chord as a human-readable key label (e.g. `Ctrl+C`, `Shift+Tab`).
+fn format_chord((code, mods): Chord) -> String {
+    let mut s = String::new();
+    if mods.contains(KeyModifiers::CONTROL) {
+        s.push_str("Ctrl+");
+    }
+    if mods.contains(KeyModifiers::ALT) {
+        s.push_str("Alt+");
+    }
+    let key = match code {
+        KeyCode::Char(' ') => "Space".to_string(),
+        KeyCode::Char(c) => c.to_string(),
+        KeyCode::Tab => "Tab".to_string(),
+        KeyCode::BackTab => "Shift+Tab".to_string(),
+        KeyCode::Enter => "Enter".to_string(),
+        KeyCode::Esc => "Esc".to_string(),
+        KeyCode::Up => "↑".to_string(),
+        KeyCode::Down => "↓".to_string(),
+        KeyCode::Left => "←".to_string(),
+        KeyCode::Right => "→".to_string(),
+        KeyCode::Home => "Home".to_string(),
+        KeyCode::End => "End".to_string(),
+        KeyCode::PageUp => "PgUp".to_string(),
+        KeyCode::PageDown => "PgDn".to_string(),
+        KeyCode::Backspace => "Backspace".to_string(),
+        KeyCode::F(n) => format!("F{n}"),
+        other => format!("{other:?}"),
+    };
+    s.push_str(&key);
+    s
 }
 
 impl Default for Keymap {
