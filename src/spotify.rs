@@ -314,33 +314,48 @@ impl Spotify {
     /// An artist's albums and singles (their discography), newest first as
     /// Spotify returns them, de-duplicated by title. `/artists/{id}/top-tracks`
     /// is 403 for non-extended apps in 2026, but `/albums` still works, so the
-    /// artist view browses albums (open one to see its tracks).
+    /// artist view browses albums (open one to see its tracks). This endpoint
+    /// caps `limit` at 10 for dev-mode apps, so we paginate.
     pub async fn artist_albums(&self, artist_id: &str) -> Result<Vec<AlbumRef>> {
         let id = ArtistId::from_id_or_uri(artist_id).context("bad artist id")?;
-        let v = self
-            .web_get(
-                &format!("artists/{}/albums", id.id()),
-                &[
-                    ("market", "from_token"),
-                    ("include_groups", "album,single"),
-                    ("limit", "50"),
-                ],
-            )
-            .await
-            .context("fetching artist albums failed")?;
+        let id = id.id().to_string();
         #[derive(serde::Deserialize)]
         struct Page {
             #[serde(default)]
             items: Vec<RawAlbumSearch>,
+            #[serde(default)]
+            next: Option<String>,
         }
-        let page: Page = serde_json::from_value(v).context("parsing artist albums")?;
         let mut seen = std::collections::HashSet::new();
-        Ok(page
-            .items
-            .into_iter()
-            .map(album_ref)
-            .filter(|a| seen.insert(a.name.to_lowercase()))
-            .collect())
+        let mut out = Vec::new();
+        let mut offset = 0u32;
+        loop {
+            let off = offset.to_string();
+            let v = self
+                .web_get(
+                    &format!("artists/{id}/albums"),
+                    &[
+                        ("market", "from_token"),
+                        ("include_groups", "album,single"),
+                        ("limit", "10"),
+                        ("offset", &off),
+                    ],
+                )
+                .await
+                .context("fetching artist albums failed")?;
+            let page: Page = serde_json::from_value(v).context("parsing artist albums")?;
+            let got = page.items.len() as u32;
+            for album in page.items.into_iter().map(album_ref) {
+                if seen.insert(album.name.to_lowercase()) {
+                    out.push(album);
+                }
+            }
+            offset += got;
+            if got == 0 || page.next.is_none() || out.len() >= 50 {
+                break;
+            }
+        }
+        Ok(out)
     }
 
     /// All episodes of a show (podcast), most-recent first as Spotify returns
