@@ -331,14 +331,16 @@ impl Player {
         self.mixer.set_volume(volume);
     }
 
-    pub fn volume_step(&mut self, delta: i32) {
-        let new = (self.volume as i32 + delta).clamp(0, u16::MAX as i32);
-        self.set_volume(new as u16);
+    /// Adjust volume by `delta` **percent**, so the percentage is exact and
+    /// every value (e.g. 67, 69) is reachable.
+    pub fn volume_step(&mut self, delta_percent: i32) {
+        let pct = (self.volume_percent() as i32 + delta_percent).clamp(0, 100) as u32;
+        self.set_volume(((pct * u16::MAX as u32 + 50) / 100) as u16);
     }
 
-    /// Volume as a 0..=100 percentage for display.
+    /// Volume as a 0..=100 percentage for display (rounded).
     pub fn volume_percent(&self) -> u8 {
-        ((self.volume as u32 * 100) / u16::MAX as u32) as u8
+        ((self.volume as u32 * 100 + u16::MAX as u32 / 2) / u16::MAX as u32) as u8
     }
 
     pub fn cycle_repeat(&mut self) {

@@ -431,8 +431,13 @@ fn render_playback_bar(f: &mut Frame, app: &App, area: Rect) {
         Status::Stopped => "■ Stopped",
     };
     let mode = if app.remote_active() { "  REMOTE" } else { "" };
+    // Easter egg: a note that flashes next to the volume for ~2s.
+    let egg = match app.easter_egg {
+        Some((msg, at)) if at.elapsed() < std::time::Duration::from_secs(2) => format!(" {msg}"),
+        _ => String::new(),
+    };
     let title = format!(
-        " {state}{mode}   vol {:>3}%   shuffle {}   repeat {} ",
+        " {state}{mode}   vol {:>3}%{egg}   shuffle {}   repeat {} ",
         app.displayed_volume_percent(),
         if app.displayed_shuffle() { "on" } else { "off" },
         app.player.repeat.label(),

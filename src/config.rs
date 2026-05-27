@@ -172,9 +172,10 @@ impl Config {
         Ok(())
     }
 
-    /// Volume as the 0..=65535 range librespot's mixer expects.
+    /// Volume as the 0..=65535 range librespot's mixer expects (rounded so it
+    /// round-trips with the percentage display).
     pub fn volume_u16(&self) -> u16 {
-        ((self.volume.min(100) as u32 * u16::MAX as u32) / 100) as u16
+        ((self.volume.min(100) as u32 * u16::MAX as u32 + 50) / 100) as u16
     }
 }
 

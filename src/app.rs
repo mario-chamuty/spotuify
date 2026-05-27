@@ -27,7 +27,8 @@ use crate::{albumart, ui};
 pub type Tui = Terminal<CrosstermBackend<Stdout>>;
 
 /// Roughly a 5% volume step (mixer range is 0..=u16::MAX).
-const VOLUME_STEP: i32 = (u16::MAX as i32) / 20;
+/// Volume step, in percent.
+const VOLUME_STEP: i32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
@@ -204,6 +205,9 @@ pub struct App {
     viz_avg_db: [f32; crate::eq::BANDS],
     /// Show the spectrum visualizer in the Now Playing panel.
     pub show_visualizer: bool,
+
+    /// A transient note flashed next to the volume (easter egg).
+    pub easter_egg: Option<(&'static str, std::time::Instant)>,
 }
 
 /// A decoded album cover bound to a terminal pixel-graphics protocol.
@@ -310,6 +314,7 @@ impl App {
             viz_levels: [0.0; crate::eq::BANDS],
             viz_avg_db: [-30.0; crate::eq::BANDS],
             show_visualizer: false,
+            easter_egg: None,
         };
         // Reflect a restored now-playing track in the queue selection.
         if let Some(i) = app.player.current {
@@ -1146,21 +1151,35 @@ impl App {
     }
 
     fn transport_volume_step(&mut self, delta: i32) {
-        if let Some(id) = self.remote_device_id.clone() {
+        let pct = if let Some(id) = self.remote_device_id.clone() {
             let cur = self
                 .remote_state
                 .as_ref()
                 .and_then(|s| s.volume_percent)
                 .unwrap_or(50) as i32;
-            // delta is in mixer units (0..=65535); convert to ~percent steps.
-            let pct_delta = (delta * 100) / (u16::MAX as i32);
-            let new = (cur + pct_delta).clamp(0, 100) as u8;
+            let new = (cur + delta).clamp(0, 100) as u8;
             if let Some(s) = self.remote_state.as_mut() {
                 s.volume_percent = Some(new);
             }
             self.remote_call(move |s| async move { s.remote_volume(new, &id).await });
+            new
         } else {
             self.player.volume_step(delta);
+            self.config.volume = self.player.volume_percent();
+            self.player.volume_percent()
+        };
+        self.trigger_volume_egg(pct);
+    }
+
+    /// A tiny easter egg: flash a note next to the volume at certain values.
+    fn trigger_volume_egg(&mut self, pct: u8) {
+        let msg = match pct {
+            69 => Some("*nice*"),
+            67 => Some("six seveeeen 🫳🫴"),
+            _ => None,
+        };
+        if let Some(m) = msg {
+            self.easter_egg = Some((m, std::time::Instant::now()));
         }
     }
 
@@ -1583,6 +1602,7 @@ impl App {
             SettingRow::Volume => {
                 self.player.volume_step(dir * VOLUME_STEP);
                 self.config.volume = self.player.volume_percent();
+                self.trigger_volume_egg(self.config.volume);
                 let _ = self.config.save();
             }
             SettingRow::EqPreset => self.apply_preset(dir),
