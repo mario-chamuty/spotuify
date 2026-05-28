@@ -20,7 +20,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # Pin to 22.04 so the binary links against glibc 2.35, not the much
+          # newer glibc on ubuntu-latest. 2.35 covers Ubuntu 22.04+, Debian 12+,
+          # Fedora 36+ and other current distros; anyone on those can just run
+          # the binary without a glibc upgrade.
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             archive: spotuify-${{ github.ref_name }}-linux-x86_64.tar.gz
           - os: macos-latest
