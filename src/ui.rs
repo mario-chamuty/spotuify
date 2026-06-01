@@ -189,10 +189,14 @@ fn render_search(f: &mut Frame, app: &mut App, area: Rect) {
     );
     f.render_widget(input, parts[0]);
 
+    let playing_uri = app.player.current_track().map(|t| t.uri.clone());
     let items: Vec<ListItem> = match &app.search_results {
         Some(SearchResults::Tracks(tracks)) => tracks
             .iter()
-            .map(|t| track_item(theme, &t.name, &t.artists, t.duration_ms, app.liked.contains(&t.uri)))
+            .map(|t| {
+                let playing = playing_uri.as_deref() == Some(t.uri.as_str());
+                track_item(theme, &t.name, &t.artists, t.duration_ms, app.liked.contains(&t.uri), playing)
+            })
             .collect(),
         Some(SearchResults::Albums(albums)) => albums
             .iter()
@@ -251,11 +255,15 @@ fn render_library(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn render_tracklist(f: &mut Frame, app: &mut App, area: Rect) {
     let theme = app.theme;
+    let playing_uri = app.player.current_track().map(|t| t.uri.clone());
     let visible = app.tracklist_visible_indices();
     let items: Vec<ListItem> = visible
         .iter()
         .filter_map(|i| app.context_tracks.get(*i))
-        .map(|t| track_item(theme, &t.name, &t.artists, t.duration_ms, app.liked.contains(&t.uri)))
+        .map(|t| {
+            let playing = playing_uri.as_deref() == Some(t.uri.as_str());
+            track_item(theme, &t.name, &t.artists, t.duration_ms, app.liked.contains(&t.uri), playing)
+        })
         .collect();
     let base = if app.context_title.is_empty() {
         "Tracks · open something from Search or Library".to_string()
@@ -928,11 +936,27 @@ fn highlight(theme: Theme) -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-fn track_item(theme: Theme, name: &str, artists: &str, duration_ms: u32, liked: bool) -> ListItem<'static> {
+fn track_item(
+    theme: Theme,
+    name: &str,
+    artists: &str,
+    duration_ms: u32,
+    liked: bool,
+    playing: bool,
+) -> ListItem<'static> {
+    // A reserved-width marker so the now-playing row stands out while names
+    // stay aligned with the rest of the list.
+    let marker = if playing { "♪ " } else { "  " };
+    let name_style = if playing {
+        Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
     let heart = if liked { "♥ " } else { "" };
     ListItem::new(Line::from(vec![
+        Span::styled(marker, Style::default().fg(theme.accent)),
         Span::styled(heart.to_string(), Style::default().fg(theme.like)),
-        Span::raw(name.to_string()),
+        Span::styled(name.to_string(), name_style),
         Span::styled(format!("  —  {artists}"), Style::default().fg(theme.dim)),
         Span::styled(format!("  ({})", fmt_ms(duration_ms)), Style::default().fg(theme.dim).italic()),
     ]))
