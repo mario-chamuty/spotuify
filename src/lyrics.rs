@@ -331,15 +331,75 @@ async fn genius(client: &reqwest::Client, artist: &str, title: &str) -> Result<O
         .await
         .context("reading genius page")?;
 
-    // Lyrics live in one or more `data-lyrics-container="true"` divs.
-    let re = Regex::new(r#"(?s)data-lyrics-container="true"[^>]*>(.*?)</div>"#)
-        .expect("valid regex");
-    let mut text = String::new();
-    for cap in re.captures_iter(&page) {
-        text.push_str(&html_to_text(&cap[1]));
-        text.push('\n');
+    Ok(Lyrics::plain("Genius", &extract_genius_lyrics(&page)))
+}
+
+/// Extract every top-level `data-lyrics-container` div as clean text. Genius
+/// nests `<div>`s inside the container (annotations, ad slots, and a header),
+/// so we balance the tags rather than stop at the first `</div>`, and drop the
+/// `data-exclude-from-selection` subtrees (the "N Contributors / … Lyrics"
+/// header and ads) before converting to text.
+fn extract_genius_lyrics(page: &str) -> String {
+    let re = Regex::new(r#"data-lyrics-container="true""#).expect("valid regex");
+    let mut out = String::new();
+    let mut consumed_to = 0usize;
+    for m in re.find_iter(page) {
+        if m.start() < consumed_to {
+            continue; // nested inside a container we already captured
+        }
+        if let Some((_, inner, end)) = balanced_div(page, m.start()) {
+            consumed_to = end;
+            let text = html_to_text(&strip_excluded(&inner));
+            if !text.trim().is_empty() {
+                out.push_str(&text);
+                out.push('\n');
+            }
+        }
     }
-    Ok(Lyrics::plain("Genius", &text))
+    out
+}
+
+/// Find the `<div …>…</div>` whose opening tag contains the byte at `attr_pos`,
+/// balancing nested `<div>`s. Returns `(open_tag_start, inner_html,
+/// index_after_closing_tag)`. All split points are ASCII, so byte slicing is
+/// UTF-8 safe.
+fn balanced_div(html: &str, attr_pos: usize) -> Option<(usize, String, usize)> {
+    let open_start = html[..attr_pos].rfind("<div")?;
+    let gt = html[attr_pos..].find('>')? + attr_pos;
+    let start = gt + 1;
+    let mut i = start;
+    let mut depth = 1usize;
+    while depth > 0 {
+        let next_open = html[i..].find("<div").map(|p| i + p);
+        let next_close = html[i..].find("</div>").map(|p| i + p);
+        match (next_open, next_close) {
+            (_, None) => return None,
+            (Some(o), Some(c)) if o < c => {
+                depth += 1;
+                i = o + 4;
+            }
+            (_, Some(c)) => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((open_start, html[start..c].to_string(), c + 6));
+                }
+                i = c + 6;
+            }
+        }
+    }
+    None
+}
+
+/// Remove any `data-exclude-from-selection="true"` div subtrees from a fragment.
+fn strip_excluded(fragment: &str) -> String {
+    let mut s = fragment.to_string();
+    while let Some(pos) = s.find(r#"data-exclude-from-selection="true""#) {
+        match balanced_div(&s, pos) {
+            Some((open_start, _, end)) => s.replace_range(open_start..end, ""),
+            None => break,
+        }
+    }
+    s
 }
 
 // ---- KaraokeTexty (Czech/Slovak) -------------------------------------------
@@ -631,6 +691,23 @@ mod tests {
         assert_eq!(lines[0].time_ms, 1_000);
         assert_eq!(lines[1].time_ms, 12_500, "single-digit fraction is tenths");
         assert_eq!(lines[2].time_ms, 60_250);
+    }
+
+    #[test]
+    fn genius_balances_nested_divs_and_drops_header() {
+        let page = concat!(
+            r#"<div data-lyrics-container="true">"#,
+            r#"<div data-exclude-from-selection="true"><div>5 Contributors</div>Song Lyrics</div>"#,
+            r#"First line<br/>Second <b>line</b>"#,
+            r#"</div>"#,
+            r#"<div data-lyrics-container="true">Chorus line</div>"#,
+        );
+        let t = extract_genius_lyrics(page);
+        assert!(!t.contains("Contributors"), "header leaked:\n{t}");
+        assert!(!t.contains("Song Lyrics"), "header leaked:\n{t}");
+        assert!(t.contains("First line"), "missing verse:\n{t}");
+        assert!(t.contains("Second line"), "tag not stripped:\n{t}");
+        assert!(t.contains("Chorus line"), "second container dropped:\n{t}");
     }
 
     #[test]
