@@ -678,16 +678,17 @@ fn render_home(f: &mut Frame, app: &App, area: Rect) {
 
     let (lines, sel_top) = home_grid_lines(&shelves, app.home_sel, theme, inner.width as usize);
 
-    // Vertical scroll: keep the whole selected shelf block (title + 4 lines) in
-    // view.
+    // Vertical scroll: keep the whole selected shelf block (title + 2 card
+    // lines) in view.
     let h = inner.height as usize;
     let max_scroll = lines.len().saturating_sub(h);
-    let scroll = (sel_top + 5).saturating_sub(h).min(max_scroll) as u16;
+    let scroll = (sel_top + 3).saturating_sub(h).min(max_scroll) as u16;
     f.render_widget(Paragraph::new(Text::from(lines)).scroll((scroll, 0)), inner);
 }
 
-/// Build the Home grid as styled lines: each shelf is a title followed by a row
-/// of bordered cards. Returns the lines and the first line of the selected
+/// Build the Home grid as styled lines: each shelf is a section title followed
+/// by a row of borderless cards (title + subtitle), the selected card marked
+/// with a slim accent bar. Returns the lines and the first line of the selected
 /// shelf's block (for vertical scrolling). Pure, so it can be unit-tested and
 /// reused by the `--home-probe` diagnostic.
 pub(crate) fn home_grid_lines(
@@ -697,13 +698,18 @@ pub(crate) fn home_grid_lines(
     avail_width: usize,
 ) -> (Vec<Line<'static>>, usize) {
     let accent = Style::default().fg(theme.accent).add_modifier(Modifier::BOLD);
+    let accent_plain = Style::default().fg(theme.accent);
     let dim = Style::default().fg(theme.dim);
+    let normal = Style::default();
     let (sel_shelf, sel_col) = sel;
 
-    const CARD_W: usize = 24; // total width incl. borders
-    const GAP: usize = 1;
-    let inner_w = CARD_W - 2;
-    let per_row = ((avail_width + GAP) / (CARD_W + GAP)).max(1);
+    const CONTENT_W: usize = 22; // visible chars of title/subtitle per card
+    const PREFIX: usize = 2; // accent bar + space ("▌ " / "  ")
+    const GAP: usize = 3; // blank columns between cards
+    const INDENT: usize = 2; // left margin of a card row
+    let col_w = PREFIX + CONTENT_W;
+    let avail = avail_width.saturating_sub(INDENT);
+    let per_row = ((avail + GAP) / (col_w + GAP)).max(1);
 
     let mut lines: Vec<Line> = Vec::new();
     let mut sel_top = 0usize;
@@ -718,52 +724,45 @@ pub(crate) fn home_grid_lines(
         };
         let end = (start + per_row).min(n);
 
-        // Title (+ a position hint when the shelf scrolls horizontally).
-        let mut title_spans = vec![Span::styled(format!(" {}", shelf.title), accent)];
-        if start > 0 || end < n {
-            title_spans.push(Span::styled(format!("   ‹{}–{}/{}›", start + 1, end, n), dim));
+        // Blank line between shelves for breathing room.
+        if si > 0 {
+            lines.push(Line::from(""));
         }
         if si == sel_shelf {
             sel_top = lines.len();
         }
+
+        // Section title (+ a position hint when the shelf scrolls horizontally).
+        let mut title_spans = vec![Span::styled(format!(" {}", shelf.title), accent)];
+        if start > 0 || end < n {
+            title_spans.push(Span::styled(format!("   {}–{}/{}", start + 1, end, n), dim));
+        }
         lines.push(Line::from(title_spans));
 
-        // Four lines per card row: top border, title, subtitle, bottom border.
-        let mut l_top: Vec<Span> = vec![Span::raw(" ")];
-        let mut l_title: Vec<Span> = vec![Span::raw(" ")];
-        let mut l_sub: Vec<Span> = vec![Span::raw(" ")];
-        let mut l_bot: Vec<Span> = vec![Span::raw(" ")];
-        let bar = "─".repeat(inner_w);
+        // Two content lines per card row: title, then subtitle. A left accent
+        // bar on both lines marks the selected card — no per-card borders.
+        let mut l_title: Vec<Span> = vec![Span::raw(" ".repeat(INDENT))];
+        let mut l_sub: Vec<Span> = vec![Span::raw(" ".repeat(INDENT))];
         for col in start..end {
             let card = &shelf.cards[col];
             let selected = si == sel_shelf && col == sel_col;
-            let bstyle = if selected { accent } else { dim };
-            let tstyle = if selected { accent } else { Style::default() };
-            let marker = if selected { "‣" } else { " " };
-            l_top.push(Span::styled(format!("┌{bar}┐"), bstyle));
-            l_title.push(Span::styled("│", bstyle));
-            l_title.push(Span::styled(fit(&format!("{marker}{}", card.title), inner_w), tstyle));
-            l_title.push(Span::styled("│", bstyle));
-            l_sub.push(Span::styled("│", bstyle));
-            l_sub.push(Span::styled(fit(&format!(" {}", card.subtitle), inner_w), dim));
-            l_sub.push(Span::styled("│", bstyle));
-            l_bot.push(Span::styled(format!("└{bar}┘"), bstyle));
+            let bar = if selected { "▌ " } else { "  " };
+            let tstyle = if selected { accent } else { normal };
+            let sstyle = if selected { accent_plain } else { dim };
+
+            l_title.push(Span::styled(bar, accent_plain));
+            l_title.push(Span::styled(fit(&card.title, CONTENT_W), tstyle));
+            l_sub.push(Span::styled(bar, accent_plain));
+            l_sub.push(Span::styled(fit(&card.subtitle, CONTENT_W), sstyle));
+
             if col + 1 < end {
-                let g = " ".repeat(GAP);
-                l_top.push(Span::raw(g.clone()));
-                l_title.push(Span::raw(g.clone()));
-                l_sub.push(Span::raw(g.clone()));
-                l_bot.push(Span::raw(g));
+                let g = Span::raw(" ".repeat(GAP));
+                l_title.push(g.clone());
+                l_sub.push(g);
             }
         }
-        if end < n {
-            l_title.push(Span::styled("  →", dim));
-        }
-        lines.push(Line::from(l_top));
         lines.push(Line::from(l_title));
         lines.push(Line::from(l_sub));
-        lines.push(Line::from(l_bot));
-        lines.push(Line::from("")); // gap between shelves
     }
 
     (lines, sel_top)
@@ -825,6 +824,10 @@ fn render_settings(f: &mut Frame, app: &App, area: Rect) {
         let (label, value) = match *row {
             SettingRow::Normalisation => {
                 ("Normalisation".to_string(), on_off(app.config.normalisation).to_string())
+            }
+            SettingRow::Quality => {
+                let q = app.config.audio_quality;
+                ("Quality".to_string(), format!("‹ {} ({} kbps) ›", q.label(), q.kbps()))
             }
             SettingRow::EqEnabled => ("Enabled".to_string(), on_off(eq.enabled()).to_string()),
             SettingRow::EqPreset => ("Preset".to_string(), format!("‹ {} ›", app.preset_name())),
@@ -957,7 +960,7 @@ mod tests {
     }
 
     #[test]
-    fn home_renders_bordered_cards_not_a_flat_list() {
+    fn home_renders_borderless_card_shelves() {
         let shelves = vec![
             HomeShelf {
                 title: "Daily Mix".to_string(),
@@ -984,21 +987,22 @@ mod tests {
             },
         ];
 
-        let (lines, _) = home_grid_lines(&shelves, (0, 0), Theme::default(), 80);
+        let (lines, sel_top) = home_grid_lines(&shelves, (0, 0), Theme::default(), 80);
         let text = flatten(&lines);
 
-        // Card borders are present → this is a grid of cards, not a plain list.
-        assert!(text.contains('┌'), "no top border:\n{text}");
-        assert!(text.contains('│'), "no side border:\n{text}");
-        assert!(text.contains('└'), "no bottom border:\n{text}");
-        // Both shelves and their cards show up.
+        // The redesign drops the heavy per-card box borders.
+        assert!(!text.contains('┌'), "borders should be gone:\n{text}");
+        assert!(!text.contains('│'), "borders should be gone:\n{text}");
+        // Section titles, card titles and subtitles all show up.
         assert!(text.contains("Daily Mix"));
         assert!(text.contains("Daily Mix 1"));
+        assert!(text.contains("Drake, Future"));
         assert!(text.contains("Discover Weekly"));
-        // The selected card is marked.
-        assert!(text.contains('‣'), "selected card not marked:\n{text}");
-        // Each shelf is title + 4 card lines + gap = 6 lines; two shelves ≈ 12
-        // lines — far more than a 3-item flat list would produce.
-        assert!(lines.len() >= 10, "too few lines for a card grid: {}", lines.len());
+        // The selected card is marked with the accent bar.
+        assert!(text.contains('▌'), "selected card not marked:\n{text}");
+        // First shelf's title is the first line (no leading blank before it).
+        assert_eq!(sel_top, 0, "selected shelf should anchor at the top");
+        // Each shelf is title + 2 card lines; the second adds a leading blank.
+        assert!(lines.len() >= 6, "unexpected line count: {}", lines.len());
     }
 }

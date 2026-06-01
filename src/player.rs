@@ -13,15 +13,24 @@ use librespot::core::authentication::Credentials;
 use librespot::core::cache::Cache;
 use librespot::core::{Session, SessionConfig, SpotifyUri};
 use librespot::playback::audio_backend;
-use librespot::playback::config::{AudioFormat, PlayerConfig};
+use librespot::playback::config::{AudioFormat, Bitrate, PlayerConfig};
 use librespot::playback::mixer::softmixer::SoftMixer;
 use librespot::playback::mixer::{Mixer, MixerConfig};
 use librespot::playback::player::{Player as LibrespotPlayer, PlayerEvent};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-use crate::config::Config;
+use crate::config::{AudioQuality, Config};
 use crate::model::Track;
+
+/// Map a SpoTUIfy quality tier onto librespot's bitrate selector.
+fn quality_to_bitrate(quality: AudioQuality) -> Bitrate {
+    match quality {
+        AudioQuality::Low => Bitrate::Bitrate96,
+        AudioQuality::Normal => Bitrate::Bitrate160,
+        AudioQuality::High => Bitrate::Bitrate320,
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
@@ -110,6 +119,7 @@ impl Player {
 
         let player_config = PlayerConfig {
             normalisation: config.normalisation,
+            bitrate: quality_to_bitrate(config.audio_quality),
             ..Default::default()
         };
 
@@ -403,6 +413,18 @@ impl Player {
             return Ok(());
         }
         self.player_config.normalisation = on;
+        self.rebuild_and_resume()
+    }
+
+    /// Change the streaming quality tier, rebuilding the player so the next
+    /// load fetches the new bitrate. The current track restarts at its
+    /// position (the engine selects format per track load).
+    pub fn set_quality(&mut self, quality: AudioQuality) -> Result<()> {
+        let bitrate = quality_to_bitrate(quality);
+        if self.player_config.bitrate == bitrate {
+            return Ok(());
+        }
+        self.player_config.bitrate = bitrate;
         self.rebuild_and_resume()
     }
 

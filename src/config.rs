@@ -56,6 +56,11 @@ pub struct Config {
     /// Normalise loudness across tracks (replaygain-style).
     pub normalisation: bool,
 
+    /// Streaming audio quality: `low` (96 kbps), `normal` (160 kbps) or `high`
+    /// (320 kbps), all Ogg Vorbis. This is the ceiling the playback engine
+    /// (librespot) exposes; true lossless/FLAC is not selectable through it.
+    pub audio_quality: AudioQuality,
+
     /// Album-art rendering mode: `auto`, `halfblocks`, `sixel`, or `kitty`.
     /// `auto` lets the terminal-graphics detector pick the best protocol and
     /// falls back to coloured half-blocks otherwise.
@@ -93,6 +98,48 @@ impl Default for EqConfig {
     }
 }
 
+/// Streaming bitrate the playback engine requests. Maps to librespot's three
+/// Ogg Vorbis tiers; the engine has no public knob to request the FLAC stream,
+/// so `High` (320 kbps) is the practical ceiling.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AudioQuality {
+    /// 96 kbps Ogg Vorbis.
+    Low,
+    /// 160 kbps Ogg Vorbis.
+    Normal,
+    /// 320 kbps Ogg Vorbis (best available).
+    #[default]
+    High,
+}
+
+impl AudioQuality {
+    /// Short lowercase name for display and TOML.
+    pub fn label(self) -> &'static str {
+        match self {
+            AudioQuality::Low => "low",
+            AudioQuality::Normal => "normal",
+            AudioQuality::High => "high",
+        }
+    }
+
+    /// Nominal bitrate in kbps.
+    pub fn kbps(self) -> u32 {
+        match self {
+            AudioQuality::Low => 96,
+            AudioQuality::Normal => 160,
+            AudioQuality::High => 320,
+        }
+    }
+
+    /// Step to the next/previous tier, wrapping.
+    pub fn cycle(self, dir: i32) -> Self {
+        let order = [AudioQuality::Low, AudioQuality::Normal, AudioQuality::High];
+        let i = order.iter().position(|&q| q == self).unwrap_or(2) as i32;
+        order[(i + dir).rem_euclid(order.len() as i32) as usize]
+    }
+}
+
 /// How album art is drawn.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -119,6 +166,7 @@ impl Default for Config {
             volume: 70,
             cache_size_mb: Some(1024),
             normalisation: true,
+            audio_quality: AudioQuality::High,
             art_mode: ArtMode::Auto,
             theme: ThemeConfig::default(),
             keys: HashMap::new(),

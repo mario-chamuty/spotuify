@@ -85,6 +85,7 @@ enum NavSnapshot {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingRow {
     Normalisation,
+    Quality,
     Volume,
     EqEnabled,
     EqPreset,
@@ -98,6 +99,7 @@ impl SettingRow {
     pub fn all() -> Vec<SettingRow> {
         let mut v = vec![
             SettingRow::Normalisation,
+            SettingRow::Quality,
             SettingRow::Volume,
             SettingRow::EqEnabled,
             SettingRow::EqPreset,
@@ -1913,6 +1915,7 @@ impl App {
     fn adjust_setting(&mut self, row: SettingRow, dir: i32) {
         match row {
             SettingRow::Normalisation => self.set_normalisation(!self.config.normalisation),
+            SettingRow::Quality => self.set_quality(dir),
             SettingRow::EqEnabled => {
                 let eq = self.player.eq();
                 eq.toggle();
@@ -1944,7 +1947,7 @@ impl App {
     fn activate_setting(&mut self, row: SettingRow) {
         match row {
             SettingRow::Normalisation | SettingRow::EqEnabled | SettingRow::ArtMode
-            | SettingRow::EqPreset => self.adjust_setting(row, 1),
+            | SettingRow::EqPreset | SettingRow::Quality => self.adjust_setting(row, 1),
             SettingRow::EqBand(i) => {
                 let eq = self.player.eq();
                 eq.adjust(i, -eq.gain(i)); // reset band to 0 dB
@@ -1964,6 +1967,18 @@ impl App {
                 self.status = format!("Normalisation {}", on_off(on));
             }
             Err(e) => self.status = format!("Normalisation change failed: {e}"),
+        }
+    }
+
+    fn set_quality(&mut self, dir: i32) {
+        let quality = self.config.audio_quality.cycle(dir);
+        match self.player.set_quality(quality) {
+            Ok(()) => {
+                self.config.audio_quality = quality;
+                let _ = self.config.save();
+                self.status = format!("Quality: {} ({} kbps)", quality.label(), quality.kbps());
+            }
+            Err(e) => self.status = format!("Quality change failed: {e}"),
         }
     }
 
