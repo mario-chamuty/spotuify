@@ -232,9 +232,12 @@ pub struct App {
     pub art_size: (u16, u16),
 
     // Pixel-graphics art (sixel/kitty/iTerm via ratatui-image). `image_picker`
-    // is set when a pixel protocol is active; `pixel_art` holds the current
-    // track's resizable protocol.
+    // is the picker for the *active* art mode; `base_picker` is the terminal's
+    // detected capabilities (font size + protocol), kept so the active picker
+    // can be re-derived live when the art mode changes — no restart needed.
+    // `pixel_art` holds the current track's resizable protocol.
     pub image_picker: Option<ratatui_image::picker::Picker>,
+    base_picker: Option<ratatui_image::picker::Picker>,
     pub pixel_art: Option<PixelArt>,
     pixel_pending: Option<String>,
 
@@ -384,6 +387,7 @@ impl App {
             art_pending: None,
             art_size: (0, 0),
             image_picker: None,
+            base_picker: None,
             pixel_art: None,
             pixel_pending: None,
             show_lyrics: false,
@@ -411,10 +415,36 @@ impl App {
         app
     }
 
-    /// Set the terminal pixel-graphics picker (enables sixel/kitty art). When
-    /// `None`, album art uses the coloured half-block renderer.
-    pub fn set_picker(&mut self, picker: Option<ratatui_image::picker::Picker>) {
-        self.image_picker = picker;
+    /// Store the terminal's detected graphics capabilities (queried once at
+    /// startup) and derive the active picker for the current art mode.
+    pub fn set_base_picker(&mut self, base: Option<ratatui_image::picker::Picker>) {
+        self.base_picker = base;
+        self.image_picker = self.derive_picker();
+    }
+
+    /// Compute the active picker for `config.art_mode` from the detected
+    /// capabilities. `None` means the coloured half-block renderer is used.
+    fn derive_picker(&self) -> Option<ratatui_image::picker::Picker> {
+        use crate::config::ArtMode;
+        use ratatui_image::picker::{Picker, ProtocolType};
+        match self.config.art_mode {
+            ArtMode::Halfblocks => None,
+            // Use the detected protocol, but fall back to half-blocks if the
+            // terminal reported no pixel protocol (or detection failed).
+            ArtMode::Auto => self
+                .base_picker
+                .filter(|p| p.protocol_type() != ProtocolType::Halfblocks),
+            // Forced protocol: keep the detected font size, override the type.
+            ArtMode::Sixel | ArtMode::Kitty => {
+                let mut picker = self.base_picker.unwrap_or_else(|| Picker::from_fontsize((8, 16)));
+                picker.set_protocol_type(if matches!(self.config.art_mode, ArtMode::Sixel) {
+                    ProtocolType::Sixel
+                } else {
+                    ProtocolType::Kitty
+                });
+                Some(picker)
+            }
+        }
     }
 
     /// Attach the MPRIS external-control channel and snapshot publisher.
@@ -2065,7 +2095,17 @@ impl App {
         let next = (cur + dir).rem_euclid(order.len() as i32) as usize;
         self.config.art_mode = order[next];
         let _ = self.config.save();
-        self.status = "Album-art mode saved — restart to apply.".to_string();
+        // Apply immediately: re-derive the picker and drop cached art so the new
+        // renderer takes over on the next frame — no restart required.
+        self.image_picker = self.derive_picker();
+        self.art = None;
+        self.art_pending = None;
+        self.pixel_art = None;
+        self.pixel_pending = None;
+        self.status = format!(
+            "Album-art mode: {}",
+            format!("{:?}", self.config.art_mode).to_lowercase()
+        );
     }
 
     fn reauthenticate(&mut self) {

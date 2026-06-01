@@ -401,6 +401,27 @@ fn render_now_playing(f: &mut Frame, app: &mut App, area: Rect) {
             .style(Style::default().fg(theme.dim));
             f.render_widget(placeholder, art_area);
         }
+
+        // Pixel protocols (sixel/kitty/iTerm) can render nothing in terminals
+        // that don't actually support them, with no error. When one is active
+        // and a cover is expected, caption the area so a blank box is explained.
+        let has_cover = app
+            .displayed_track()
+            .is_some_and(|t| t.album_art_url.is_some());
+        if app.image_picker.is_some() && has_cover && art_area.height >= 2 {
+            let hint = Rect {
+                x: art_area.x,
+                y: art_area.y + art_area.height - 1,
+                width: art_area.width,
+                height: 1,
+            };
+            f.render_widget(
+                Paragraph::new("no cover? switch Album-art mode in Settings (←/→)")
+                    .style(Style::default().fg(theme.dim).add_modifier(Modifier::ITALIC))
+                    .alignment(Alignment::Center),
+                hint,
+            );
+        }
     }
 
     let info = match app.displayed_track() {
