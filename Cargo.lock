@@ -4005,7 +4005,7 @@ dependencies = [
 
 [[package]]
 name = "spotuify"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "aes",
  "anyhow",
