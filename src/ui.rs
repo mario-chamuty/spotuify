@@ -360,70 +360,113 @@ fn render_devices(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn render_now_playing(f: &mut Frame, app: &mut App, area: Rect) {
     let theme = app.theme;
-    let title = if app.show_visualizer {
-        " Spectrum ".to_string()
-    } else if app.show_lyrics {
-        match app.lyrics_or_status() {
-            Ok(l) if !l.provider.is_empty() => format!(" Lyrics · {} ", l.provider),
-            _ => " Lyrics ".to_string(),
-        }
-    } else {
-        " Now Playing ".to_string()
-    };
-    let block = panel(theme, title);
+    let block = panel(theme, " Now Playing ");
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let split = Layout::default()
+    // Album art and the track info are always shown; lyrics and the spectrum
+    // are independent toggles that stack below, each scaled to its share so
+    // several can be visible at once.
+    let mut constraints = vec![Constraint::Fill(2), Constraint::Length(4)];
+    if app.show_lyrics {
+        constraints.push(Constraint::Fill(3));
+    }
+    if app.show_visualizer {
+        constraints.push(Constraint::Fill(2));
+    }
+    let rects = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(4)])
+        .constraints(constraints)
         .split(inner);
-    let art_area = split[0];
 
-    // Largest centered square that fits: cells are ~twice as tall as wide and a
-    // half-block packs two pixels per cell, so cols ≈ 2·rows keeps art square.
-    let rows = art_area.height.min(art_area.width / 2).max(1);
-    let cols = (rows * 2).min(art_area.width);
+    render_cover(f, app, rects[0]);
+    render_track_info(f, app, rects[1]);
+
+    let mut idx = 2;
+    if app.show_lyrics {
+        let title = match app.lyrics_or_status() {
+            Ok(l) if !l.provider.is_empty() => format!("Lyrics · {}", l.provider),
+            _ => "Lyrics".to_string(),
+        };
+        let body = section_body(f, theme, rects[idx], &title);
+        render_lyrics(f, app, body);
+        idx += 1;
+    }
+    if app.show_visualizer {
+        let body = section_body(f, theme, rects[idx], "Spectrum");
+        render_visualizer(f, app, body);
+    }
+}
+
+/// Draw a small dim section header on the first row and return the body rect
+/// below it (used to label the stacked lyrics/spectrum sections).
+fn section_body(f: &mut Frame, theme: Theme, area: Rect, title: &str) -> Rect {
+    if area.height == 0 {
+        return area;
+    }
+    let header = Rect { x: area.x, y: area.y, width: area.width, height: 1 };
+    f.render_widget(
+        Paragraph::new(Span::styled(
+            format!(" {title}"),
+            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+        )),
+        header,
+    );
+    Rect {
+        x: area.x,
+        y: area.y + 1,
+        width: area.width,
+        height: area.height - 1,
+    }
+}
+
+/// Render the album cover (or a placeholder) into `area`, sizing the art to the
+/// largest centred square that fits and recording it in `app.art_size` so the
+/// fetcher requests the cover at the current scale.
+fn render_cover(f: &mut Frame, app: &mut App, area: Rect) {
+    let theme = app.theme;
+    // Cells are ~twice as tall as wide and a half-block packs two pixels per
+    // cell, so cols ≈ 2·rows keeps the art square.
+    let rows = area.height.min(area.width / 2).max(1);
+    let cols = (rows * 2).min(area.width);
     app.art_size = (cols, rows);
 
-    if app.show_visualizer {
-        render_visualizer(f, app, art_area);
-    } else if app.show_lyrics {
-        render_lyrics(f, app, art_area);
-    } else {
-        let art_drawn = crate::albumart::render_into(app, f, art_area, cols, rows);
-        if !art_drawn {
-            let placeholder = Paragraph::new(if app.player.current_track().is_some() {
-                "\n  ♪  loading cover…"
-            } else {
-                "\n  nothing playing"
-            })
-            .style(Style::default().fg(theme.dim));
-            f.render_widget(placeholder, art_area);
-        }
-
-        // Pixel protocols (sixel/kitty/iTerm) can render nothing in terminals
-        // that don't actually support them, with no error. When one is active
-        // and a cover is expected, caption the area so a blank box is explained.
-        let has_cover = app
-            .displayed_track()
-            .is_some_and(|t| t.album_art_url.is_some());
-        if app.image_picker.is_some() && has_cover && art_area.height >= 2 {
-            let hint = Rect {
-                x: art_area.x,
-                y: art_area.y + art_area.height - 1,
-                width: art_area.width,
-                height: 1,
-            };
-            f.render_widget(
-                Paragraph::new("no cover? switch Album-art mode in Settings (←/→)")
-                    .style(Style::default().fg(theme.dim).add_modifier(Modifier::ITALIC))
-                    .alignment(Alignment::Center),
-                hint,
-            );
-        }
+    let art_drawn = crate::albumart::render_into(app, f, area, cols, rows);
+    if !art_drawn {
+        let placeholder = Paragraph::new(if app.player.current_track().is_some() {
+            "\n  ♪  loading cover…"
+        } else {
+            "\n  nothing playing"
+        })
+        .style(Style::default().fg(theme.dim));
+        f.render_widget(placeholder, area);
     }
 
+    // Pixel protocols (sixel/kitty/iTerm) can render nothing in terminals that
+    // don't actually support them, with no error. When one is active and a
+    // cover is expected, caption the area so a blank box is explained.
+    let has_cover = app
+        .displayed_track()
+        .is_some_and(|t| t.album_art_url.is_some());
+    if app.image_picker.is_some() && has_cover && area.height >= 2 {
+        let hint = Rect {
+            x: area.x,
+            y: area.y + area.height - 1,
+            width: area.width,
+            height: 1,
+        };
+        f.render_widget(
+            Paragraph::new("no cover? switch Album-art mode in Settings (←/→)")
+                .style(Style::default().fg(theme.dim).add_modifier(Modifier::ITALIC))
+                .alignment(Alignment::Center),
+            hint,
+        );
+    }
+}
+
+/// Render the now-playing track's name/artist/album, centred.
+fn render_track_info(f: &mut Frame, app: &App, area: Rect) {
+    let theme = app.theme;
     let info = match app.displayed_track() {
         Some(t) => {
             let heart = if app.liked.contains(&t.uri) { "♥ " } else { "" };
@@ -440,7 +483,10 @@ fn render_now_playing(f: &mut Frame, app: &mut App, area: Rect) {
         }
         None => Text::from(Line::from(Span::styled("—", Style::default().fg(theme.dim)))),
     };
-    f.render_widget(Paragraph::new(info).alignment(Alignment::Center).wrap(Wrap { trim: true }), split[1]);
+    f.render_widget(
+        Paragraph::new(info).alignment(Alignment::Center).wrap(Wrap { trim: true }),
+        area,
+    );
 }
 
 /// Render the lyrics panel. For synced lyrics the active line is highlighted and
