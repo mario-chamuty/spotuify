@@ -23,6 +23,24 @@ pub struct PersistedState {
     /// Volume percentage 0..=100.
     pub volume: u8,
     pub search_history: Vec<String>,
+    /// The tab the user was on last (so the app reopens where they left off).
+    /// `None` for older state files or a transient view (e.g. a track list).
+    #[serde(default)]
+    pub last_view: Option<PersistedView>,
+}
+
+/// Serializable mirror of the stable [`crate::app::View`] tabs. Transient views
+/// (a track list opened from search) are not persisted — the data behind them
+/// isn't restored, so reopening to them would show an empty pane.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PersistedView {
+    Search,
+    Library,
+    Queue,
+    Devices,
+    Settings,
+    Home,
 }
 
 /// Serializable mirror of [`crate::player::Repeat`].

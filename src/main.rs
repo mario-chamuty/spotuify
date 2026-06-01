@@ -24,6 +24,7 @@ mod snapshot;
 mod spotify;
 mod theme;
 mod ui;
+mod update;
 mod webtoken;
 
 use std::io::{self, Stdout};

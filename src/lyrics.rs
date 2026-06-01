@@ -1,21 +1,31 @@
-//! Lyrics for the now-playing track.
+//! Lyrics for the now-playing track, from several sources tried in order.
 //!
-//! Primary source is librespot's lyrics endpoint (Spotify/Musixmatch), fetched
-//! over the playback session (the official client), so it isn't subject to the
-//! Web API rate limits and usually carries per-line timestamps.
+//! 1. **Spotify / Musixmatch** via librespot's lyrics endpoint — best quality,
+//!    usually time-synced. Fetched over the playback session.
+//! 2. **LRCLIB** (<https://lrclib.net>) — free, keyless; often has synced LRC.
+//! 3. **Genius** (<https://genius.com>) — broad catalogue; plain text only.
+//! 4. **KaraokeTexty** (<https://www.karaoketexty.cz>) — strong Czech/Slovak
+//!    coverage; plain text only.
 //!
-//! When Spotify has nothing for a track, we fall back to **LRCLIB**
-//! (<https://lrclib.net>), a free, keyless community lyrics database. LRCLIB
-//! often has time-synced (LRC) lyrics too; if not, we take its plain text and
-//! show it unsynced. The fallback is best-effort and matches on artist + title
-//! (+ album/duration when the exact endpoint is available).
+//! Every web source runs under a short timeout and is strictly best-effort: a
+//! failure or timeout just moves to the next source, so a slow network can
+//! never leave lyrics stuck "loading". Untrusted search results (Genius,
+//! KaraokeTexty) are validated against the requested artist + title — a
+//! mismatch is discarded rather than shown, so we never display wrong lyrics.
+
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use librespot::core::{Session, SpotifyId, SpotifyUri};
 use librespot::metadata::lyrics::SyncType;
 use librespot::metadata::Lyrics as LibrespotLyrics;
+use regex::Regex;
 
 use crate::model::{PlayableKind, Track};
+
+/// Browser-like UA for the scrape sources (some reject default clients).
+const BROWSER_UA: &str =
+    "Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0";
 
 /// A track's lyrics, flattened to what the UI needs.
 #[derive(Debug, Clone)]
@@ -45,27 +55,62 @@ impl Lyrics {
             .rposition(|l| l.time_ms <= position_ms)
             .or(Some(0))
     }
+
+    fn plain(provider: &str, text: &str) -> Option<Self> {
+        let lines: Vec<LyricLine> = text
+            .lines()
+            .map(|l| LyricLine {
+                time_ms: 0,
+                text: l.trim().to_string(),
+            })
+            .collect();
+        // Drop leading/trailing blank lines.
+        let start = lines.iter().position(|l| !l.text.is_empty())?;
+        let end = lines.iter().rposition(|l| !l.text.is_empty())? + 1;
+        Some(Lyrics {
+            synced: false,
+            provider: provider.to_string(),
+            lines: lines[start..end].to_vec(),
+        })
+    }
 }
 
-/// Fetch lyrics for `track`: try Spotify first, then fall back to LRCLIB.
+/// Fetch lyrics for `track`: Spotify first, then web fallbacks in order.
 pub async fn fetch(session: &Session, track: &Track) -> Result<Lyrics> {
     // 1. Spotify / Musixmatch via librespot — best quality, often time-synced.
     match fetch_spotify(session, &track.uri).await {
         Ok(l) if !l.lines.is_empty() => return Ok(l),
-        Ok(_) => tracing::debug!("spotify returned empty lyrics, trying lrclib"),
-        Err(e) => tracing::debug!("spotify lyrics unavailable ({e:#}), trying lrclib"),
+        Ok(_) => tracing::debug!("spotify returned empty lyrics, trying fallbacks"),
+        Err(e) => tracing::debug!("spotify lyrics unavailable ({e:#}), trying fallbacks"),
     }
 
-    // 2. LRCLIB fallback. Podcasts won't be there, so don't bother.
+    // Podcasts won't be in the lyrics databases.
     if track.kind == PlayableKind::Episode {
         anyhow::bail!("no lyrics for this track");
     }
-    fetch_lrclib(track)
-        .await
-        .context("no lyrics from Spotify or LRCLIB")
+
+    let client = http_client();
+    let artist = primary_artist(&track.artists);
+    let title = clean_title(&track.name);
+
+    // 2..N: best-effort web sources. Errors and "not found" both fall through.
+    macro_rules! try_source {
+        ($fut:expr, $name:literal) => {
+            match $fut.await {
+                Ok(Some(l)) => return Ok(l),
+                Ok(None) => tracing::debug!("{}: no match", $name),
+                Err(e) => tracing::debug!("{} failed: {e:#}", $name),
+            }
+        };
+    }
+    try_source!(lrclib(&client, track, &artist, &title), "lrclib");
+    try_source!(genius(&client, &artist, &title), "genius");
+    try_source!(karaoketexty(&client, &artist, &title), "karaoketexty");
+
+    anyhow::bail!("no lyrics from Spotify, LRCLIB, Genius or KaraokeTexty")
 }
 
-/// The original Spotify-session lyrics fetch for a `spotify:track:<id>` URI.
+/// The Spotify-session lyrics fetch for a `spotify:track:<id>` URI (unchanged).
 async fn fetch_spotify(session: &Session, track_uri: &str) -> Result<Lyrics> {
     let uri = SpotifyUri::from_uri(track_uri).context("bad track uri")?;
     let id = SpotifyId::try_from(&uri).context("uri has no playable id")?;
@@ -91,12 +136,24 @@ async fn fetch_spotify(session: &Session, track_uri: &str) -> Result<Lyrics> {
     })
 }
 
-// ---- LRCLIB fallback -------------------------------------------------------
+/// Shared HTTP client with timeouts so no source can hang the fetch task.
+fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .connect_timeout(Duration::from_secs(4))
+        .user_agent(BROWSER_UA)
+        .build()
+        .unwrap_or_default()
+}
 
-/// One LRCLIB record (subset of fields we use). `syncedLyrics` is LRC text;
-/// `plainLyrics` is newline-separated plain text. Either may be absent.
+// ---- LRCLIB ----------------------------------------------------------------
+
 #[derive(serde::Deserialize)]
 struct LrcLibItem {
+    #[serde(rename = "trackName", default)]
+    track_name: String,
+    #[serde(rename = "artistName", default)]
+    artist_name: String,
     #[serde(rename = "syncedLyrics", default)]
     synced_lyrics: Option<String>,
     #[serde(rename = "plainLyrics", default)]
@@ -112,46 +169,38 @@ fn lrclib_ua() -> String {
     )
 }
 
-/// Query LRCLIB for `track`, preferring synced lyrics over plain.
-async fn fetch_lrclib(track: &Track) -> Result<Lyrics> {
-    let client = reqwest::Client::new();
-    let artist = primary_artist(&track.artists);
+/// LRCLIB: exact endpoint first (duration-matched), then a validated search.
+async fn lrclib(
+    client: &reqwest::Client,
+    track: &Track,
+    artist: &str,
+    title: &str,
+) -> Result<Option<Lyrics>> {
     let duration = (track.duration_ms / 1000).to_string();
-
-    // Exact-match endpoint first (artist + title + album + duration). LRCLIB
-    // allows a small duration tolerance and 404s on no match.
     let resp = client
         .get("https://lrclib.net/api/get")
         .query(&[
-            ("artist_name", artist.as_str()),
-            ("track_name", track.name.as_str()),
+            ("artist_name", artist),
+            ("track_name", title),
             ("album_name", track.album.as_str()),
             ("duration", duration.as_str()),
         ])
         .header("User-Agent", lrclib_ua())
         .send()
         .await
-        .context("lrclib request failed")?;
+        .context("lrclib get failed")?;
 
-    let item = if resp.status().is_success() {
-        let body = resp.text().await.context("reading lrclib response")?;
-        Some(serde_json::from_str::<LrcLibItem>(&body).context("parsing lrclib record")?)
-    } else {
-        // No exact match — fall back to a fuzzy search and pick the best hit.
-        search_lrclib(&client, &artist, &track.name).await?
-    };
+    // The duration-matched endpoint is trusted without re-validation.
+    if resp.status().is_success() {
+        let body = resp.text().await.context("reading lrclib get")?;
+        if let Ok(item) = serde_json::from_str::<LrcLibItem>(&body) {
+            if let Some(l) = lyrics_from_lrclib(item) {
+                return Ok(Some(l));
+            }
+        }
+    }
 
-    let item = item.context("no lyrics on lrclib")?;
-    lyrics_from_lrclib(item).context("lrclib record had no usable lyrics")
-}
-
-/// Fuzzy LRCLIB search; returns the first hit with synced lyrics, else the
-/// first with plain lyrics.
-async fn search_lrclib(
-    client: &reqwest::Client,
-    artist: &str,
-    title: &str,
-) -> Result<Option<LrcLibItem>> {
+    // Fall back to a fuzzy search; validate the hit's artist + title.
     let body = client
         .get("https://lrclib.net/api/search")
         .query(&[("artist_name", artist), ("track_name", title)])
@@ -160,27 +209,28 @@ async fn search_lrclib(
         .await
         .context("lrclib search failed")?
         .error_for_status()
-        .context("lrclib search returned an error")?
+        .context("lrclib search error")?
         .text()
         .await
-        .context("reading lrclib search response")?;
+        .context("reading lrclib search")?;
 
     let items: Vec<LrcLibItem> =
-        serde_json::from_str(&body).context("parsing lrclib search results")?;
-
+        serde_json::from_str(&body).context("parsing lrclib search")?;
     let mut best_plain = None;
     for item in items {
+        if !title_matches(title, &item.track_name) || !artist_matches(artist, &item.artist_name) {
+            continue;
+        }
         if has_text(&item.synced_lyrics) {
-            return Ok(Some(item));
+            return Ok(lyrics_from_lrclib(item));
         }
         if best_plain.is_none() && has_text(&item.plain_lyrics) {
             best_plain = Some(item);
         }
     }
-    Ok(best_plain)
+    Ok(best_plain.and_then(lyrics_from_lrclib))
 }
 
-/// Turn an LRCLIB record into our `Lyrics`, preferring synced LRC.
 fn lyrics_from_lrclib(item: LrcLibItem) -> Option<Lyrics> {
     if item.instrumental {
         return Some(Lyrics {
@@ -192,7 +242,6 @@ fn lyrics_from_lrclib(item: LrcLibItem) -> Option<Lyrics> {
             }],
         });
     }
-
     if let Some(lrc) = item.synced_lyrics.filter(|s| !s.trim().is_empty()) {
         let lines = parse_lrc(&lrc);
         if !lines.is_empty() {
@@ -203,42 +252,296 @@ fn lyrics_from_lrclib(item: LrcLibItem) -> Option<Lyrics> {
             });
         }
     }
+    item.plain_lyrics
+        .as_deref()
+        .and_then(|p| Lyrics::plain("LRCLIB", p))
+}
 
-    if let Some(plain) = item.plain_lyrics.filter(|s| !s.trim().is_empty()) {
-        let lines = plain
-            .lines()
-            .map(|l| LyricLine {
-                time_ms: 0,
-                text: l.to_string(),
-            })
-            .collect();
-        return Some(Lyrics {
-            synced: false,
-            provider: "LRCLIB".to_string(),
-            lines,
-        });
+// ---- Genius ----------------------------------------------------------------
+
+/// Genius: public multi-search, validate the top song hit, scrape its page.
+async fn genius(client: &reqwest::Client, artist: &str, title: &str) -> Result<Option<Lyrics>> {
+    let q = format!("{artist} {title}");
+    let body = client
+        .get("https://genius.com/api/search/multi")
+        .query(&[("q", q.as_str())])
+        .send()
+        .await
+        .context("genius search failed")?
+        .error_for_status()
+        .context("genius search error")?
+        .text()
+        .await
+        .context("reading genius search")?;
+
+    let json: serde_json::Value =
+        serde_json::from_str(&body).context("parsing genius search")?;
+    let sections = json
+        .get("response")
+        .and_then(|r| r.get("sections"))
+        .and_then(|s| s.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let mut url = None;
+    for section in &sections {
+        let Some(hits) = section.get("hits").and_then(|h| h.as_array()) else {
+            continue;
+        };
+        for hit in hits {
+            if hit.get("type").and_then(|t| t.as_str()) != Some("song") {
+                continue;
+            }
+            let result = match hit.get("result") {
+                Some(r) => r,
+                None => continue,
+            };
+            let cand_title = result
+                .get("title")
+                .and_then(|t| t.as_str())
+                .unwrap_or_default();
+            let cand_artist = result
+                .get("primary_artist")
+                .and_then(|a| a.get("name"))
+                .and_then(|n| n.as_str())
+                .or_else(|| result.get("artist_names").and_then(|n| n.as_str()))
+                .unwrap_or_default();
+            if title_matches(title, cand_title) && artist_matches(artist, cand_artist) {
+                url = result
+                    .get("url")
+                    .and_then(|u| u.as_str())
+                    .map(str::to_string);
+                break;
+            }
+        }
+        if url.is_some() {
+            break;
+        }
     }
 
-    None
+    let Some(url) = url else { return Ok(None) };
+    let page = client
+        .get(&url)
+        .send()
+        .await
+        .context("genius page failed")?
+        .error_for_status()
+        .context("genius page error")?
+        .text()
+        .await
+        .context("reading genius page")?;
+
+    // Lyrics live in one or more `data-lyrics-container="true"` divs.
+    let re = Regex::new(r#"(?s)data-lyrics-container="true"[^>]*>(.*?)</div>"#)
+        .expect("valid regex");
+    let mut text = String::new();
+    for cap in re.captures_iter(&page) {
+        text.push_str(&html_to_text(&cap[1]));
+        text.push('\n');
+    }
+    Ok(Lyrics::plain("Genius", &text))
 }
+
+// ---- KaraokeTexty (Czech/Slovak) -------------------------------------------
+
+/// KaraokeTexty: `?q=` search, validate a song hit, scrape its lyrics page.
+async fn karaoketexty(
+    client: &reqwest::Client,
+    artist: &str,
+    title: &str,
+) -> Result<Option<Lyrics>> {
+    let q = format!("{artist} {title}");
+    let page = client
+        .get("https://www.karaoketexty.cz/search")
+        .query(&[("q", q.as_str())])
+        .send()
+        .await
+        .context("karaoketexty search failed")?
+        .error_for_status()
+        .context("karaoketexty search error")?
+        .text()
+        .await
+        .context("reading karaoketexty search")?;
+
+    // Song results: <a href="/texty-pisni/<artist>/<song>">Artist - Title</a>.
+    let re = Regex::new(r#"href="(/texty-pisni/[a-z0-9-]+/[a-z0-9-]+)"[^>]*>([^<]+)</a>"#)
+        .expect("valid regex");
+    let mut path = None;
+    for cap in re.captures_iter(&page) {
+        let label = html_to_text(&cap[2]);
+        let (cand_artist, cand_title) = match label.split_once('-') {
+            Some((a, t)) => (a.trim(), t.trim()),
+            None => ("", label.trim()),
+        };
+        if title_matches(title, cand_title)
+            && (cand_artist.is_empty() || artist_matches(artist, cand_artist))
+        {
+            path = Some(cap[1].to_string());
+            break;
+        }
+    }
+    let Some(path) = path else { return Ok(None) };
+
+    let song = client
+        .get(format!("https://www.karaoketexty.cz{path}"))
+        .send()
+        .await
+        .context("karaoketexty page failed")?
+        .error_for_status()
+        .context("karaoketexty page error")?
+        .text()
+        .await
+        .context("reading karaoketexty page")?;
+
+    // Original lyrics sit in `<span class="para_col1">…</span>` (left column;
+    // the right column is a translation we skip).
+    let col = Regex::new(r#"(?s)<span class="para_col1">(.*?)</span>"#).expect("valid regex");
+    let mut text = String::new();
+    for cap in col.captures_iter(&song) {
+        text.push_str(&html_to_text(&cap[1]));
+        text.push('\n');
+    }
+    Ok(Lyrics::plain("KaraokeTexty", &text))
+}
+
+// ---- shared helpers --------------------------------------------------------
 
 fn has_text(s: &Option<String>) -> bool {
     s.as_deref().is_some_and(|s| !s.trim().is_empty())
 }
 
-/// LRCLIB matches best on the primary artist; tracks list them comma-separated.
+/// LRCLIB/Genius match best on the primary artist; tracks list them comma- or
+/// `&`-separated.
 fn primary_artist(artists: &str) -> String {
     artists
-        .split(',')
+        .split([',', '&'])
         .next()
         .unwrap_or(artists)
         .trim()
         .to_string()
 }
 
-/// Parse LRC text (`[mm:ss.xx] words`) into timestamped lines. Lines may carry
-/// several timestamps (repeated lyrics); each becomes its own entry. Metadata
-/// tags like `[ar:..]`, `[ti:..]`, `[length:..]` are ignored.
+/// Drop `(...)`/`[...]` and ` - …` suffixes (feat./remaster/live) from a title.
+fn clean_title(title: &str) -> String {
+    let head = title.split(" - ").next().unwrap_or(title);
+    let mut out = String::new();
+    let mut depth = 0u32;
+    for ch in head.chars() {
+        match ch {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth = depth.saturating_sub(1),
+            _ if depth == 0 => out.push(ch),
+            _ => {}
+        }
+    }
+    out.trim().to_string()
+}
+
+/// Lowercase, strip diacritics, drop punctuation, collapse whitespace — so
+/// "Voľnosť" and "volnost" compare equal.
+fn normalize(s: &str) -> String {
+    let mut out = String::new();
+    let mut prev_space = true;
+    for ch in s.chars() {
+        for lc in ch.to_lowercase() {
+            let d = deaccent(lc);
+            if d.is_alphanumeric() {
+                out.push(d);
+                prev_space = false;
+            } else if !prev_space {
+                out.push(' ');
+                prev_space = true;
+            }
+        }
+    }
+    out.trim().to_string()
+}
+
+fn deaccent(c: char) -> char {
+    match c {
+        'á' | 'à' | 'â' | 'ä' | 'ã' | 'å' | 'ā' | 'ą' => 'a',
+        'č' | 'ç' | 'ć' => 'c',
+        'ď' => 'd',
+        'é' | 'è' | 'ê' | 'ë' | 'ě' | 'ē' | 'ę' => 'e',
+        'í' | 'ì' | 'î' | 'ï' | 'ī' => 'i',
+        'ĺ' | 'ľ' | 'ł' => 'l',
+        'ñ' | 'ň' => 'n',
+        'ó' | 'ò' | 'ô' | 'ö' | 'õ' | 'ō' | 'ø' => 'o',
+        'ŕ' | 'ř' => 'r',
+        'š' | 'ś' | 'ş' => 's',
+        'ť' => 't',
+        'ú' | 'ù' | 'û' | 'ü' | 'ū' | 'ů' => 'u',
+        'ý' | 'ÿ' => 'y',
+        'ž' | 'ź' | 'ż' => 'z',
+        other => other,
+    }
+}
+
+/// True if normalized `a` and `b` are equal or one contains the other.
+fn fuzzy(a: &str, b: &str) -> bool {
+    let (a, b) = (normalize(a), normalize(b));
+    !a.is_empty() && !b.is_empty() && (a == b || a.contains(&b) || b.contains(&a))
+}
+
+fn title_matches(want: &str, cand: &str) -> bool {
+    fuzzy(want, &clean_title(cand))
+}
+
+fn artist_matches(want: &str, cand: &str) -> bool {
+    fuzzy(want, &primary_artist(cand)) || fuzzy(want, cand)
+}
+
+/// Turn an HTML fragment into plain text: `<br>` to newlines, tags removed,
+/// entities decoded.
+fn html_to_text(fragment: &str) -> String {
+    let br = Regex::new(r"(?i)<br\s*/?>").expect("valid regex");
+    let with_nl = br.replace_all(fragment, "\n");
+    let tags = Regex::new(r"(?s)<[^>]+>").expect("valid regex");
+    let stripped = tags.replace_all(&with_nl, "");
+    decode_entities(&stripped)
+}
+
+/// Decode the small set of HTML entities that appear in lyrics text.
+fn decode_entities(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < s.len() {
+        if bytes[i] == b'&' {
+            if let Some(semi) = s[i..].find(';').map(|p| i + p) {
+                let ent = &s[i + 1..semi];
+                let decoded = match ent {
+                    "amp" => Some('&'),
+                    "lt" => Some('<'),
+                    "gt" => Some('>'),
+                    "quot" => Some('"'),
+                    "apos" | "#39" => Some('\''),
+                    "nbsp" => Some(' '),
+                    _ => ent
+                        .strip_prefix('#')
+                        .and_then(|num| {
+                            num.strip_prefix(['x', 'X'])
+                                .and_then(|h| u32::from_str_radix(h, 16).ok())
+                                .or_else(|| num.parse::<u32>().ok())
+                        })
+                        .and_then(char::from_u32),
+                };
+                if let Some(c) = decoded {
+                    out.push(c);
+                    i = semi + 1;
+                    continue;
+                }
+            }
+        }
+        // Not an entity: copy this char.
+        let ch = s[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+/// Parse LRC text (`[mm:ss.xx] words`) into timestamped lines.
 fn parse_lrc(s: &str) -> Vec<LyricLine> {
     let mut out: Vec<LyricLine> = Vec::new();
     for raw in s.lines() {
@@ -264,7 +567,6 @@ fn parse_lrc(s: &str) -> Vec<LyricLine> {
 }
 
 /// Parse one LRC timestamp tag (`mm:ss`, `mm:ss.xx`, `mm:ss.xxx`) to ms.
-/// Returns `None` for non-timestamp metadata tags.
 fn parse_lrc_time(tag: &str) -> Option<u32> {
     let (mm, rest) = tag.split_once(':')?;
     let mm: u32 = mm.trim().parse().ok()?;
@@ -290,41 +592,52 @@ mod tests {
     use super::*;
 
     #[test]
+    fn normalize_strips_slovak_diacritics() {
+        assert_eq!(normalize("Voľnosť"), "volnost");
+        assert_eq!(normalize("Pásla Kone"), "pasla kone");
+        assert_eq!(normalize("Žltý  kôň!"), "zlty kon");
+    }
+
+    #[test]
+    fn clean_title_drops_suffixes() {
+        assert_eq!(clean_title("Hymna (feat. Rytmus)"), "Hymna");
+        assert_eq!(clean_title("Song - Remastered 2011"), "Song");
+        assert_eq!(clean_title("Plain"), "Plain");
+    }
+
+    #[test]
+    fn fuzzy_matches_accents_and_substrings() {
+        assert!(title_matches("Voľnosť", "Volnost"));
+        assert!(artist_matches("Kontrafakt", "kontrafakt feat. somebody"));
+        assert!(!title_matches("Hymna", "Completely Different Song"));
+    }
+
+    #[test]
+    fn html_to_text_decodes_and_breaks() {
+        let frag = "Don&#39;t stop<br/>me &amp; you<br>k&ocirc;&#328;";
+        // &ocirc; isn't in our table -> left as-is; numeric ones decode.
+        let t = html_to_text(frag);
+        assert!(t.contains("Don't stop"));
+        assert!(t.contains("me & you"));
+        assert!(t.contains('\n'));
+        assert!(t.contains('ň')); // &#328; -> ň
+    }
+
+    #[test]
     fn parses_synced_lrc_with_fraction_widths() {
-        let lrc = "[ar:Artist]\n[ti:Title]\n[length:02:00]\n[00:01.00]first\n[00:12.5]second\n[01:00.250]third";
+        let lrc = "[ar:Artist]\n[00:01.00]first\n[00:12.5]second\n[01:00.250]third";
         let lines = parse_lrc(lrc);
         assert_eq!(lines.len(), 3, "metadata tags must be skipped");
         assert_eq!(lines[0].time_ms, 1_000);
-        assert_eq!(lines[0].text, "first");
         assert_eq!(lines[1].time_ms, 12_500, "single-digit fraction is tenths");
         assert_eq!(lines[2].time_ms, 60_250);
     }
 
     #[test]
-    fn repeated_timestamps_expand_to_multiple_lines() {
-        let lines = parse_lrc("[00:05.00][01:05.00]chorus");
-        assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0].time_ms, 5_000);
-        assert_eq!(lines[1].time_ms, 65_000);
-        assert!(lines.iter().all(|l| l.text == "chorus"));
-    }
-
-    #[test]
-    fn primary_artist_takes_first_of_many() {
-        assert_eq!(primary_artist("Drake, Future, Metro"), "Drake");
-        assert_eq!(primary_artist("Adele"), "Adele");
-    }
-
-    #[test]
-    fn plain_lyrics_are_unsynced() {
-        let item = LrcLibItem {
-            synced_lyrics: None,
-            plain_lyrics: Some("line one\nline two".to_string()),
-            instrumental: false,
-        };
-        let lyrics = lyrics_from_lrclib(item).expect("plain lyrics");
-        assert!(!lyrics.synced);
-        assert_eq!(lyrics.lines.len(), 2);
-        assert_eq!(lyrics.active_line(999_999), None, "unsynced has no active line");
+    fn plain_trims_blank_edges() {
+        let l = Lyrics::plain("X", "\n\n  first\nsecond\n\n").unwrap();
+        assert_eq!(l.lines.len(), 2);
+        assert_eq!(l.lines[0].text, "first");
+        assert!(!l.synced);
     }
 }

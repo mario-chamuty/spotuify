@@ -41,6 +41,37 @@ pub enum View {
     Home,
 }
 
+impl View {
+    /// Map to the persistable tab, or `None` for transient views (a track list
+    /// whose contents aren't restored across runs).
+    fn persisted(self) -> Option<crate::persist::PersistedView> {
+        use crate::persist::PersistedView as P;
+        match self {
+            View::Search => Some(P::Search),
+            View::Library => Some(P::Library),
+            View::Queue => Some(P::Queue),
+            View::Devices => Some(P::Devices),
+            View::Settings => Some(P::Settings),
+            View::Home => Some(P::Home),
+            View::Tracklist => None,
+        }
+    }
+}
+
+impl From<crate::persist::PersistedView> for View {
+    fn from(v: crate::persist::PersistedView) -> Self {
+        use crate::persist::PersistedView as P;
+        match v {
+            P::Search => View::Search,
+            P::Library => View::Library,
+            P::Queue => View::Queue,
+            P::Devices => View::Devices,
+            P::Settings => View::Settings,
+            P::Home => View::Home,
+        }
+    }
+}
+
 /// A selectable item in the Home view, identifying the underlying data.
 #[derive(Debug, Clone, Copy)]
 pub enum HomeItem {
@@ -214,6 +245,9 @@ pub struct App {
     lyrics_for: Option<String>,
     lyrics_pending: Option<String>,
 
+    /// Set once the startup check finds a newer GitHub release.
+    pub update_available: Option<crate::update::UpdateInfo>,
+
     // Equalizer overlay.
     pub eq_open: bool,
     pub eq_sel: usize,
@@ -289,14 +323,24 @@ impl App {
         let theme = Theme::from_config(&config.theme);
         let keymap = Keymap::build(&config.keys);
 
-        // Restore the previous session (queue/position/prefs) — paused.
+        // Restore the previous session (queue/position/prefs/last tab) — paused.
         let mut search_history = Vec::new();
+        let mut initial_view = View::Search;
         if let Some(state) = crate::persist::PersistedState::load() {
             player.restore_session(state.queue, state.current_index, state.position_ms);
             player.set_shuffle(state.shuffle);
             player.set_repeat(state.repeat.into());
             search_history = state.search_history;
+            if let Some(v) = state.last_view {
+                initial_view = v.into();
+            }
         }
+        // Search is the only view that starts in the text input; others list.
+        let initial_focus = if initial_view == View::Search {
+            Focus::Input
+        } else {
+            Focus::List
+        };
 
         let spectrum = player.spectrum();
         let mut app = Self {
@@ -309,9 +353,9 @@ impl App {
             updates_rx,
             control_rx: None,
             snapshot_tx: None,
-            view: View::Search,
+            view: initial_view,
             nav_stack: Vec::new(),
-            focus: Focus::Input,
+            focus: initial_focus,
             should_quit: false,
             status: "Welcome to SpoTUIfy — press ? for help".to_string(),
             search_input: String::new(),
@@ -346,6 +390,7 @@ impl App {
             lyrics: None,
             lyrics_for: None,
             lyrics_pending: None,
+            update_available: None,
             eq_open: false,
             eq_sel: 0,
             help_open: false,
@@ -393,6 +438,7 @@ impl App {
 
         self.spawn_load_playlists();
         self.refresh_devices();
+        self.spawn_check_update();
 
         while !self.should_quit {
             terminal.draw(|f| ui::draw(f, self))?;
@@ -438,6 +484,7 @@ impl App {
             repeat: self.player.repeat.into(),
             volume: self.player.volume_percent(),
             search_history: self.search_history.clone(),
+            last_view: self.view.persisted(),
         };
         if let Err(e) = state.save() {
             tracing::warn!("saving session state failed: {e}");
@@ -2183,6 +2230,16 @@ impl App {
         });
     }
 
+    /// Check GitHub Releases for a newer version (once, at startup).
+    fn spawn_check_update(&self) {
+        let tx = self.updates_tx.clone();
+        tokio::spawn(async move {
+            if let Some(info) = crate::update::check_latest().await {
+                let _ = tx.send(Update::NewRelease(info));
+            }
+        });
+    }
+
     fn spawn_liked(&mut self) {
         self.push_nav();
         self.status = "Loading Liked Songs…".to_string();
@@ -2510,6 +2567,15 @@ impl App {
                 self.home_loading = false;
                 self.home_sel = (0, 0);
                 self.status = "Home".to_string();
+            }
+            Update::NewRelease(info) => {
+                self.status = format!(
+                    "Update available: v{} — {} (current v{})",
+                    info.latest,
+                    info.url,
+                    env!("CARGO_PKG_VERSION"),
+                );
+                self.update_available = Some(info);
             }
             Update::Error(msg) => {
                 tracing::error!("{msg}");

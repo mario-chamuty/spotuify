@@ -508,6 +508,19 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
         Span::raw(app.status.clone()),
     ]));
     f.render_widget(p, area);
+
+    // Right-aligned "update available" badge, drawn over the status row.
+    if let Some(u) = &app.update_available {
+        let badge = Paragraph::new(Line::from(Span::styled(
+            format!(" ⬆ v{} available ", u.latest),
+            Style::default()
+                .fg(Color::Black)
+                .bg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        )))
+        .alignment(Alignment::Right);
+        f.render_widget(badge, area);
+    }
 }
 
 fn render_prompt(f: &mut Frame, app: &App, area: Rect) {

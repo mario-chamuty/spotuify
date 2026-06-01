@@ -49,5 +49,7 @@ pub enum Update {
     },
     /// Assembled Home content.
     Home(Box<crate::spotify::Home>),
+    /// A newer release was found on GitHub.
+    NewRelease(crate::update::UpdateInfo),
     Error(String),
 }
