@@ -2407,9 +2407,10 @@ impl App {
         if !self.show_lyrics {
             return;
         }
-        let Some(uri) = self.displayed_track().map(|t| t.uri.clone()) else {
+        let Some(track) = self.displayed_track().cloned() else {
             return;
         };
+        let uri = track.uri.clone();
         let loaded = self.lyrics_for.as_deref() == Some(uri.as_str());
         let pending = self.lyrics_pending.as_deref() == Some(uri.as_str());
         if loaded || pending {
@@ -2419,7 +2420,7 @@ impl App {
         let session = self.player.session();
         let tx = self.updates_tx.clone();
         tokio::spawn(async move {
-            let lyrics = crate::lyrics::fetch(&session, &uri).await.ok();
+            let lyrics = crate::lyrics::fetch(&session, &track).await.ok();
             let _ = tx.send(Update::Lyrics { track_uri: uri, lyrics });
         });
     }
