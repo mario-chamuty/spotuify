@@ -12,6 +12,10 @@ mod cookie;
 mod eq;
 mod keys;
 mod lyrics;
+// Cross-platform media keys (Windows SMTC / macOS Now Playing). Linux uses the
+// MPRIS service below instead, so this module is built everywhere but Linux.
+#[cfg(not(target_os = "linux"))]
+mod media;
 mod message;
 mod model;
 // MPRIS is a freedesktop/Linux interface; only built there.
@@ -55,13 +59,25 @@ async fn main() -> Result<()> {
 
     // Config errors (missing client id, first-run template) are friendly and
     // must print before we ever touch the terminal.
-    let config = match Config::load() {
+    let mut config = match Config::load() {
         Ok(c) => c,
         Err(e) => {
             eprintln!("\n{e}\n");
             std::process::exit(1);
         }
     };
+
+    // First run: walk the user through the one-time Web API app setup (open the
+    // dashboard, register the redirect URI, paste the client id) and save it,
+    // instead of erroring out and making them edit the config by hand. Runs on
+    // the normal screen, like the OAuth prompts below. Skipping leaves the id
+    // empty, and `authenticate` then prints the manual instructions.
+    if config.client_id.trim().is_empty() {
+        if let Err(e) = auth::run_first_run_setup(&mut config) {
+            eprintln!("\nSetup couldn't complete: {e:#}\n");
+            std::process::exit(1);
+        }
+    }
 
     // Diagnostic: `spotuify --home-probe` mints a web-player token from the
     // configured `sp_dc` cookie and prints the real Home shelves (Daily Mixes,
@@ -87,8 +103,10 @@ async fn main() -> Result<()> {
     let (snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(snapshot::Snapshot::default());
     #[cfg(target_os = "linux")]
     mpris::spawn(control_tx, snapshot_rx);
+    // Windows/macOS get the same media-key support via souvlaki (SMTC / Now
+    // Playing); Linux's MPRIS service above covers it there.
     #[cfg(not(target_os = "linux"))]
-    let _ = (control_tx, snapshot_rx); // MPRIS (media keys) is Linux-only
+    media::spawn(control_tx, snapshot_rx);
 
     // Detect the terminal's graphics capabilities *before* entering raw mode,
     // since detection queries the terminal on stdout/stdin. The app derives the

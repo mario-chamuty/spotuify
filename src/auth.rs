@@ -115,7 +115,15 @@ pub async fn authenticate(config: &Config) -> Result<Auth> {
             &config.redirect_uri,
             WEB_API_SCOPES,
         )
-        .await?;
+        .await
+        .with_context(|| {
+            format!(
+                "Web API login failed. The most common cause is a Redirect URI \
+                 mismatch: open developer.spotify.com/dashboard → your app → \
+                 Settings → Redirect URIs and make sure it contains exactly `{}`.",
+                config.redirect_uri
+            )
+        })?;
         *client.token.lock().await.unwrap() = Some(web_token_from(&token));
         client.write_token_cache().await.ok();
     } else {
@@ -127,6 +135,52 @@ pub async fn authenticate(config: &Config) -> Result<Auth> {
         spotify: Spotify::new(client),
         cache,
     })
+}
+
+/// First-run guided setup for the Web API client id, printed on the normal
+/// screen before the TUI starts (consistent with the OAuth prompts). Opens the
+/// Spotify dashboard, shows the exact Redirect URI to register, reads the client
+/// id from stdin and saves it to the config, so the very next step (OAuth) can
+/// proceed without a restart. Leaving the id blank skips setup; `authenticate`
+/// then prints the manual fallback instructions.
+pub fn run_first_run_setup(config: &mut Config) -> Result<()> {
+    use std::io::{self, Write};
+
+    let redirect = config.redirect_uri.clone();
+    println!("\n  Welcome to SpoTUIfy – one-time setup\n");
+    println!("  Audio playback uses Spotify's official client and needs nothing.");
+    println!("  Search and your library use the Web API, which Spotify now");
+    println!("  rate-limits unless you use your own free app. Two quick steps:\n");
+    println!("    1. Create a free app at https://developer.spotify.com/dashboard");
+    println!("       (any name and description – it stays private to you).");
+    println!("    2. In the app's settings, add this exact Redirect URI:\n");
+    println!("         {redirect}\n");
+    println!("       It must match character for character.\n");
+
+    print!("  Open the dashboard in your browser now? [Y/n] ");
+    io::stdout().flush().ok();
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer).ok();
+    if !answer.trim().eq_ignore_ascii_case("n") {
+        if let Err(e) = open::that("https://developer.spotify.com/dashboard") {
+            println!("  (Couldn't open a browser automatically: {e})");
+        }
+    }
+
+    println!("\n  Then copy the app's Client ID (Settings → Basic Information).");
+    print!("  Paste Client ID here and press Enter (blank to skip): ");
+    io::stdout().flush().ok();
+    let mut id = String::new();
+    io::stdin().read_line(&mut id).context("reading client id from stdin")?;
+    let id = id.trim().to_string();
+    if id.is_empty() {
+        return Ok(()); // user skipped; authenticate() prints manual instructions
+    }
+
+    config.client_id = id;
+    config.save().context("saving the client id to config")?;
+    println!("\n  Saved your Client ID. Continuing to sign-in…\n");
+    Ok(())
 }
 
 fn build_cache(config: &Config) -> Result<Cache> {
