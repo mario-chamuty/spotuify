@@ -389,6 +389,7 @@ fn render_now_playing(f: &mut Frame, app: &mut App, area: Rect) {
             _ => "Lyrics".to_string(),
         };
         let body = section_body(f, theme, rects[idx], &title);
+        app.lyrics_view_h = body.height as usize;
         render_lyrics(f, app, body);
         idx += 1;
     }
@@ -506,8 +507,15 @@ fn render_lyrics(f: &mut Frame, app: &App, area: Rect) {
 
     let height = area.height as usize;
     let active = lyrics.active_line(app.playback_position());
-    // Keep the active line roughly centred; unsynced lyrics start at the top.
-    let start = active.map_or(0, |a| a.saturating_sub(height / 2));
+    // Synced: keep the active line roughly centred. Unsynced: use the manual
+    // scroll offset (PageUp/PageDown), clamped to the content.
+    let start = match active {
+        Some(a) => a.saturating_sub(height / 2),
+        None => {
+            let max_start = lyrics.lines.len().saturating_sub(height);
+            app.lyrics_scroll.min(max_start)
+        }
+    };
     let end = (start + height).min(lyrics.lines.len());
 
     let rows: Vec<Line> = lyrics.lines[start..end]

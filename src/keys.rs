@@ -57,6 +57,8 @@ pub enum Action {
     ToggleLyrics,
     ToggleEqualizer,
     ToggleVisualizer,
+    LyricsScrollUp,
+    LyricsScrollDown,
 }
 
 impl Action {
@@ -101,6 +103,8 @@ impl Action {
             Action::ToggleLyrics => "toggle-lyrics",
             Action::ToggleEqualizer => "toggle-equalizer",
             Action::ToggleVisualizer => "toggle-visualizer",
+            Action::LyricsScrollUp => "lyrics-scroll-up",
+            Action::LyricsScrollDown => "lyrics-scroll-down",
         }
     }
 
@@ -145,6 +149,8 @@ impl Action {
             Action::ToggleLyrics => "Toggle lyrics panel",
             Action::ToggleEqualizer => "Open the equalizer",
             Action::ToggleVisualizer => "Toggle the spectrum visualizer",
+            Action::LyricsScrollUp => "Scroll lyrics up",
+            Action::LyricsScrollDown => "Scroll lyrics down",
         }
     }
 
@@ -237,6 +243,8 @@ fn default_bindings() -> Vec<(Action, &'static [&'static str])> {
         (Action::ToggleLyrics, &["y"]),
         (Action::ToggleEqualizer, &["E"]),
         (Action::ToggleVisualizer, &["v"]),
+        (Action::LyricsScrollDown, &["pagedown"]),
+        (Action::LyricsScrollUp, &["pageup"]),
     ]
 }
 

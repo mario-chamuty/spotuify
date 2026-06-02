@@ -247,6 +247,12 @@ pub struct App {
     /// Track URI the loaded `lyrics` belong to.
     lyrics_for: Option<String>,
     lyrics_pending: Option<String>,
+    /// Manual scroll offset (first visible line) for unsynced lyrics; synced
+    /// lyrics auto-scroll and ignore this.
+    pub lyrics_scroll: usize,
+    /// Visible height of the lyrics panel, recorded during render so scrolling
+    /// can be clamped to the content.
+    pub lyrics_view_h: usize,
 
     /// Set once the startup check finds a newer GitHub release.
     pub update_available: Option<crate::update::UpdateInfo>,
@@ -398,6 +404,8 @@ impl App {
             lyrics: None,
             lyrics_for: None,
             lyrics_pending: None,
+            lyrics_scroll: 0,
+            lyrics_view_h: 0,
             update_available: None,
             last_reconnect_attempt: None,
             eq_open: false,
@@ -672,12 +680,15 @@ impl App {
             Action::AddToPlaylist => self.open_add_to_playlist(),
             Action::ToggleLyrics => {
                 self.show_lyrics = !self.show_lyrics;
+                self.lyrics_scroll = 0;
                 self.status = if self.show_lyrics {
                     "Lyrics on".to_string()
                 } else {
                     "Lyrics off".to_string()
                 };
             }
+            Action::LyricsScrollDown => self.scroll_lyrics(1),
+            Action::LyricsScrollUp => self.scroll_lyrics(-1),
             Action::ToggleEqualizer => self.eq_open = !self.eq_open,
             Action::ToggleVisualizer => {
                 self.show_visualizer = !self.show_visualizer;
@@ -2259,6 +2270,7 @@ impl App {
         self.lyrics = None;
         self.lyrics_for = None;
         self.lyrics_pending = None;
+        self.lyrics_scroll = 0;
         if let Some(i) = self.player.current {
             self.queue_state.select(Some(i));
         }
@@ -2527,6 +2539,26 @@ impl App {
                 Err(e) => tracing::warn!("album art failed: {e}"),
             }
         });
+    }
+
+    /// Scroll the unsynced lyrics panel by ~a page in `dir` (±1). Synced lyrics
+    /// auto-scroll, so manual scrolling is a no-op for them.
+    fn scroll_lyrics(&mut self, dir: i32) {
+        if !self.show_lyrics {
+            return;
+        }
+        let Some(lyrics) = self.lyrics.as_ref() else {
+            return;
+        };
+        if lyrics.synced {
+            self.status = "Synced lyrics scroll with the song".to_string();
+            return;
+        }
+        let height = self.lyrics_view_h.max(1);
+        let max_start = lyrics.lines.len().saturating_sub(height);
+        let step = height.saturating_sub(1).max(1) as i32;
+        let next = self.lyrics_scroll as i32 + dir * step;
+        self.lyrics_scroll = next.clamp(0, max_start as i32) as usize;
     }
 
     /// Fetch lyrics for the now-playing track when the lyrics panel is shown
