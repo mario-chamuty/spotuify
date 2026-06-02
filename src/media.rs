@@ -138,11 +138,16 @@ fn run(controls: UnboundedSender<Action>, mut state: watch::Receiver<Snapshot>) 
 
 #[cfg(target_os = "macos")]
 fn run_loop_tick(dur: Duration) {
-    use core_foundation_sys::runloop::{kCFRunLoopDefaultMode, CFRunLoopRunInMode};
+    use core_foundation_sys::runloop::{
+        kCFRunLoopDefaultMode, kCFRunLoopRunFinished, CFRunLoopRunInMode,
+    };
     // SAFETY: plain FFI call into CoreFoundation with the static default-mode
     // constant; runs this thread's run loop for `dur`, then returns.
-    unsafe {
-        CFRunLoopRunInMode(kCFRunLoopDefaultMode, dur.as_secs_f64(), 0);
+    let result = unsafe { CFRunLoopRunInMode(kCFRunLoopDefaultMode, dur.as_secs_f64(), 0) };
+    // With no input sources registered yet, CFRunLoopRunInMode returns instantly
+    // with `Finished` instead of blocking for `dur`; sleep so we don't busy-spin.
+    if result == kCFRunLoopRunFinished {
+        std::thread::sleep(dur);
     }
 }
 
