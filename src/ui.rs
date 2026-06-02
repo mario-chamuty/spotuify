@@ -297,7 +297,7 @@ fn render_queue(f: &mut Frame, app: &mut App, area: Rect) {
             ]))
         })
         .collect();
-    let title = library_title(app, "Queue · Enter jumps to track");
+    let title = library_title(app, "Queue · Enter jumps · x removes");
     let list = List::new(items)
         .block(panel(theme, title))
         .highlight_style(highlight(theme))

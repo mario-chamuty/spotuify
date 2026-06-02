@@ -646,6 +646,7 @@ impl App {
             }
             Action::Activate => self.activate_selection(),
             Action::Enqueue => self.enqueue_selection(),
+            Action::RemoveFromQueue => self.remove_queue_selection(),
             Action::OpenAlbum => self.open_album_from_selection(),
             Action::ToggleLike => self.toggle_like_selection(),
             Action::AddToPlaylist => self.open_add_to_playlist(),
@@ -1485,6 +1486,36 @@ impl App {
         if let Some(track) = track {
             self.status = format!("Queued: {}", track.name);
             self.player.enqueue(track);
+        }
+    }
+
+    /// Remove the selected track from the queue (Queue view only).
+    fn remove_queue_selection(&mut self) {
+        if self.view != View::Queue {
+            return;
+        }
+        let Some(vis) = self.queue_state.selected() else {
+            return;
+        };
+        let Some(idx) = self.resolve_index(vis) else {
+            return;
+        };
+        let name = self.player.queue.get(idx).map(|t| t.name.clone());
+        if self.player.remove_from_queue(idx) {
+            self.on_track_changed();
+        }
+        if self.filter_active() {
+            self.rebuild_filter();
+        }
+        // Keep the cursor on the row that now occupies the removed slot.
+        let visible_len = self.queue_visible_indices().len();
+        if visible_len == 0 {
+            self.queue_state.select(None);
+        } else {
+            self.queue_state.select(Some(vis.min(visible_len - 1)));
+        }
+        if let Some(n) = name {
+            self.status = format!("Removed “{n}” from queue");
         }
     }
 

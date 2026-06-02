@@ -233,6 +233,35 @@ impl Player {
         }
     }
 
+    /// Remove the queue entry at `index`, fixing up the current index. Returns
+    /// `true` if the now-playing track changed (i.e. the current entry was
+    /// removed and playback advanced to the next track).
+    pub fn remove_from_queue(&mut self, index: usize) -> bool {
+        if index >= self.queue.len() {
+            return false;
+        }
+        self.queue.remove(index);
+        let Some(cur) = self.current else {
+            return false;
+        };
+        if index < cur {
+            // A track before the current one shifted everything down by one.
+            self.current = Some(cur - 1);
+            false
+        } else if index > cur {
+            false
+        } else {
+            // Removed the now-playing track: advance to whatever takes its slot
+            // (or stop if the queue is now empty).
+            if self.queue.is_empty() {
+                self.stop();
+            } else {
+                self.play_index(index.min(self.queue.len() - 1));
+            }
+            true
+        }
+    }
+
     fn play_index(&mut self, index: usize) {
         let Some(track) = self.queue.get(index) else {
             return;
