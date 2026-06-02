@@ -1,7 +1,7 @@
 //! Web-player access tokens, minted from the user's `sp_dc` cookie.
 //!
-//! Spotify's private GraphQL API ("pathfinder") — the only source of Daily
-//! Mixes, Discover Weekly, Release Radar and the genre/mood shelves on Home —
+//! Spotify's private GraphQL API ("pathfinder") – the only source of Daily
+//! Mixes, Discover Weekly, Release Radar and the genre/mood shelves on Home –
 //! accepts **only** the web player's own access tokens. Developer-app tokens get
 //! `403 RBAC: access denied`, and librespot's keymaster tokens can't be minted
 //! anymore. The web player itself obtains a token by calling
@@ -109,7 +109,7 @@ impl WebToken {
         let tok: TokenResponse = serde_json::from_str(&body)
             .with_context(|| format!("parsing token response: {}", truncate(&body, 200)))?;
         if tok.is_anonymous || tok.access_token.is_empty() {
-            bail!("Spotify returned an anonymous token — the sp_dc cookie is invalid or expired");
+            bail!("Spotify returned an anonymous token – the sp_dc cookie is invalid or expired");
         }
         Ok(Cached {
             token: tok.access_token,

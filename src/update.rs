@@ -102,12 +102,16 @@ fn asset_name(version: &str) -> Option<String> {
 /// screen, so call it only after the TUI has been torn down.
 pub async fn download_and_install(info: &UpdateInfo) -> Result<String> {
     let asset = asset_name(&info.latest).context("no prebuilt binary for this platform")?;
-    let url = format!("https://github.com/{REPO}/releases/download/v{}/{asset}", info.latest);
+    let base = format!("https://github.com/{REPO}/releases/download/v{}", info.latest);
+    let url = format!("{base}/{asset}");
+    let sha_url = format!("{url}.sha256");
 
-    println!("  Downloading {asset} …");
     let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(15))
         .user_agent(concat!("spotuify/", env!("CARGO_PKG_VERSION")))
         .build()?;
+
+    println!("  Downloading {asset} …");
     let bytes = client
         .get(&url)
         .send()
@@ -119,12 +123,57 @@ pub async fn download_and_install(info: &UpdateInfo) -> Result<String> {
         .await
         .context("reading the downloaded archive")?;
 
+    // Verify the published SHA-256 before trusting the binary. Fail closed: if the
+    // checksum is missing or doesn't match, refuse to install.
+    println!("  Verifying checksum …");
+    let expected = client
+        .get(&sha_url)
+        .send()
+        .await
+        .context("checksum request failed")?
+        .error_for_status()
+        .context("no checksum published for this release")?
+        .text()
+        .await
+        .context("reading the checksum")?;
+    verify_sha256(&bytes, &expected)?;
+
     println!("  Installing …");
     // Extraction + the executable swap are blocking filesystem work.
     tokio::task::spawn_blocking(move || install_blob(&bytes))
         .await
         .context("install task panicked")??;
     Ok(info.latest.clone())
+}
+
+/// Check `bytes` against the expected SHA-256 (a bare hex digest, optionally
+/// followed by a filename as `shasum` prints it).
+fn verify_sha256(bytes: &[u8], expected: &str) -> Result<()> {
+    use sha2::{Digest, Sha256};
+
+    let expected = expected
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if expected.len() != 64 {
+        anyhow::bail!("malformed checksum published for this release");
+    }
+    let actual = hex_lower(&Sha256::digest(bytes));
+    if actual != expected {
+        anyhow::bail!("checksum mismatch – refusing to install (expected {expected}, got {actual})");
+    }
+    Ok(())
+}
+
+/// Lowercase hex encoding (no extra dependency just for this).
+fn hex_lower(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
 }
 
 /// Extract the binary from the downloaded archive and swap it over the running
@@ -137,16 +186,22 @@ fn install_blob(bytes: &[u8]) -> Result<()> {
     // Write next to the target so the final swap is a same-volume operation.
     let tmp = dir.join(".spotuify-update.tmp");
     std::fs::write(&tmp, &binary).with_context(|| format!("writing {}", tmp.display()))?;
+
+    // Always clean up the temp file, whether or not the swap succeeds.
+    let result = swap_with(&tmp);
+    let _ = std::fs::remove_file(&tmp);
+    result
+}
+
+/// Set the executable bit (Unix) and replace the running binary with `tmp`.
+fn swap_with(tmp: &std::path::Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))
+        std::fs::set_permissions(tmp, std::fs::Permissions::from_mode(0o755))
             .context("setting executable permission")?;
     }
-
-    self_replace::self_replace(&tmp).context("replacing the running executable")?;
-    let _ = std::fs::remove_file(&tmp);
-    Ok(())
+    self_replace::self_replace(tmp).context("replacing the running executable")
 }
 
 /// Pull the `spotuify.exe` member out of the Windows release zip.

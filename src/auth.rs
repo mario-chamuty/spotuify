@@ -1,7 +1,7 @@
 //! Authentication. Two PKCE OAuth flows, each cached so the browser is only
 //! needed on first launch:
 //!
-//! * **Playback** uses Spotify's official desktop ("keymaster") client id —
+//! * **Playback** uses Spotify's official desktop ("keymaster") client id –
 //!   librespot's `login5` only streams for Spotify's own client ids. No
 //!   developer app required; the reusable credentials are cached by librespot.
 //! * **Web API** (search, playlists, library, playback control) uses the user's
@@ -36,7 +36,7 @@ const STREAMING_REDIRECT_URI: &str = "http://127.0.0.1:5588/login";
 /// librespot session, so it just needs streaming/remote-control.
 const STREAMING_SCOPES: &[&str] = &["streaming", "app-remote-control"];
 
-/// Scopes for the Web API (user-app) token — everything the endpoints touch.
+/// Scopes for the Web API (user-app) token – everything the endpoints touch.
 const WEB_API_SCOPES: &[&str] = &[
     "user-read-private",
     "user-read-email",

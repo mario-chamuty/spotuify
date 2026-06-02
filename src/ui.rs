@@ -107,7 +107,7 @@ fn render_help(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.accent))
-        .title(" Keybindings — press any key to close ");
+        .title(" Keybindings – press any key to close ");
     let inner = block.inner(rect);
     f.render_widget(block, rect);
 
@@ -146,7 +146,7 @@ fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
         View::Queue => 3,
         View::Home => 4,
         View::Settings => 5,
-        // Artist is a transient detail view, not a tab — highlight none.
+        // Artist is a transient detail view, not a tab – highlight none.
         View::Artist => titles.len(),
     };
     let tabs = Tabs::new(titles.iter().map(|t| Span::raw(*t)).collect::<Vec<_>>())
@@ -296,7 +296,7 @@ fn render_queue(f: &mut Frame, app: &mut App, area: Rect) {
             ListItem::new(Line::from(vec![
                 Span::styled(marker, style),
                 Span::styled(t.name.clone(), style),
-                Span::styled(format!("  —  {}", t.artists), Style::default().fg(theme.dim)),
+                Span::styled(format!("  –  {}", t.artists), Style::default().fg(theme.dim)),
             ]))
         })
         .collect();
@@ -443,7 +443,7 @@ fn render_cover(f: &mut Frame, app: &mut App, area: Rect) {
 
     let art_drawn = crate::albumart::render_into(app, f, cover, cols, rows);
     if !art_drawn {
-        // Only shown when no art is drawn — never over a working cover. In a
+        // Only shown when no art is drawn – never over a working cover. In a
         // pixel mode (sixel/kitty), add a hint since those can silently render
         // nothing in terminals that don't support the chosen protocol.
         let msg = if app.player.current_track().is_none() {
@@ -479,7 +479,7 @@ fn render_track_info(f: &mut Frame, app: &App, area: Rect) {
                 Line::from(Span::styled(t.album.clone(), Style::default().fg(theme.dim))),
             ])
         }
-        None => Text::from(Line::from(Span::styled("—", Style::default().fg(theme.dim)))),
+        None => Text::from(Line::from(Span::styled("–", Style::default().fg(theme.dim)))),
     };
     f.render_widget(
         Paragraph::new(info).alignment(Alignment::Center).wrap(Wrap { trim: true }),
@@ -770,7 +770,7 @@ fn render_home(f: &mut Frame, app: &App, area: Rect) {
     let shelves = app.home_shelves();
     if shelves.is_empty() {
         f.render_widget(
-            Paragraph::new("\n  Nothing to show — try playing some music first.")
+            Paragraph::new("\n  Nothing to show – try playing some music first.")
                 .style(Style::default().fg(theme.dim)),
             inner,
         );
@@ -841,7 +841,7 @@ pub(crate) fn home_grid_lines(
         lines.push(Line::from(title_spans));
 
         // Two content lines per card row: title, then subtitle. A left accent
-        // bar on both lines marks the selected card — no per-card borders.
+        // bar on both lines marks the selected card – no per-card borders.
         let mut l_title: Vec<Span> = vec![Span::raw(" ".repeat(INDENT))];
         let mut l_sub: Vec<Span> = vec![Span::raw(" ".repeat(INDENT))];
         for col in start..end {
@@ -1108,7 +1108,7 @@ fn track_item(
         Span::styled(marker, Style::default().fg(theme.accent)),
         Span::styled(heart.to_string(), Style::default().fg(theme.like)),
         Span::styled(name.to_string(), name_style),
-        Span::styled(format!("  —  {artists}"), Style::default().fg(theme.dim)),
+        Span::styled(format!("  –  {artists}"), Style::default().fg(theme.dim)),
         Span::styled(format!("  ({})", fmt_ms(duration_ms)), Style::default().fg(theme.dim).italic()),
     ]))
 }

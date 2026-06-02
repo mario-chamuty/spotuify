@@ -5,7 +5,7 @@
 //! current playback over a `watch` channel (to answer property reads and emit
 //! `PropertiesChanged`) and forwards transport requests to the app as
 //! [`Action`]s over an mpsc channel. If the session bus is unavailable we just
-//! log and skip — the app keeps working without media-key support.
+//! log and skip – the app keeps working without media-key support.
 
 use std::collections::HashMap;
 

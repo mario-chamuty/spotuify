@@ -763,7 +763,7 @@ async fn json_or_err(resp: reqwest::Response) -> Result<serde_json::Value> {
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-        anyhow::bail!("Spotify rate limit reached — wait a few seconds and try again");
+        anyhow::bail!("Spotify rate limit reached – wait a few seconds and try again");
     }
     if status == reqwest::StatusCode::FORBIDDEN {
         anyhow::bail!("unavailable: Spotify restricts this for development-mode apps (403)");

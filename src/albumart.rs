@@ -1,7 +1,7 @@
 //! Album art rendering: download a cover image and turn it into colored
-//! half-block (`▀`) cells. Each character cell encodes two vertical pixels —
+//! half-block (`▀`) cells. Each character cell encodes two vertical pixels –
 //! the upper half via the glyph's foreground color and the lower half via its
-//! background color — giving roughly photographic art in any truecolor terminal.
+//! background color – giving roughly photographic art in any truecolor terminal.
 
 use anyhow::{Context, Result};
 use image::imageops::FilterType;
@@ -41,7 +41,7 @@ pub fn render_into(app: &mut App, f: &mut Frame, area: Rect, cols: u16, rows: u1
 
     // Pixel-graphics path. Size the target to the largest *pixel-square* that
     // fits, using the terminal's real cell aspect (font size), so the square
-    // cover fills the box exactly and stays centred — rather than the 2:1
+    // cover fills the box exactly and stays centred – rather than the 2:1
     // half-block square, which letterboxes and top-left-aligns under sixel.
     let font = app.image_picker.map(|p| p.font_size());
     if let Some(pixel) = app.pixel_art.as_mut() {

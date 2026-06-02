@@ -235,7 +235,7 @@ pub struct App {
     // Pixel-graphics art (sixel/kitty/iTerm via ratatui-image). `image_picker`
     // is the picker for the *active* art mode; `base_picker` is the terminal's
     // detected capabilities (font size + protocol), kept so the active picker
-    // can be re-derived live when the art mode changes — no restart needed.
+    // can be re-derived live when the art mode changes – no restart needed.
     // `pixel_art` holds the current track's resizable protocol.
     pub image_picker: Option<ratatui_image::picker::Picker>,
     base_picker: Option<ratatui_image::picker::Picker>,
@@ -343,7 +343,7 @@ impl App {
         let theme = Theme::from_config(&config.theme);
         let keymap = Keymap::build(&config.keys);
 
-        // Restore the previous session (queue/position/prefs/last tab) — paused.
+        // Restore the previous session (queue/position/prefs/last tab) – paused.
         let mut search_history = Vec::new();
         let mut initial_view = View::Search;
         if let Some(state) = crate::persist::PersistedState::load() {
@@ -377,7 +377,7 @@ impl App {
             nav_stack: Vec::new(),
             focus: initial_focus,
             should_quit: false,
-            status: "Welcome to SpoTUIfy — press ? for help".to_string(),
+            status: "Welcome to SpoTUIfy – press ? for help".to_string(),
             search_input: String::new(),
             search_kind: SearchKind::Tracks,
             search_results: None,
@@ -736,7 +736,7 @@ impl App {
         };
         if !crate::update::can_self_update() {
             self.status = format!(
-                "No prebuilt binary for this platform — download v{} from {}",
+                "No prebuilt binary for this platform – download v{} from {}",
                 info.latest, info.url
             );
             return;
@@ -1169,7 +1169,7 @@ impl App {
             }
         }
         self.last_reconnect_attempt = Some(std::time::Instant::now());
-        self.status = "Playback connection lost — reconnecting…".to_string();
+        self.status = "Playback connection lost – reconnecting…".to_string();
         match self.player.reconnect().await {
             Ok(()) => self.status = "Reconnected to Spotify.".to_string(),
             Err(e) => {
@@ -1965,7 +1965,7 @@ impl App {
             return;
         };
         if self.playlists.is_empty() {
-            self.status = "No playlists loaded yet — open Library first.".to_string();
+            self.status = "No playlists loaded yet – open Library first.".to_string();
             return;
         }
         let items: Vec<(String, String)> = self
@@ -2072,7 +2072,7 @@ impl App {
 
     fn handle_eq_key(&mut self, key: KeyEvent) {
         let eq = self.player.eq();
-        // Whether this key changed the curve (so we can auto-enable the EQ —
+        // Whether this key changed the curve (so we can auto-enable the EQ –
         // otherwise "changing the equalizer does nothing" because it's off).
         let mut changed = false;
         match key.code {
@@ -2287,7 +2287,7 @@ impl App {
         self.config.art_mode = order[next];
         let _ = self.config.save();
         // Apply immediately: re-derive the picker and rebuild the cover so the
-        // new renderer takes over on the next frame — no restart required. The
+        // new renderer takes over on the next frame – no restart required. The
         // pixel protocol is rebuilt from the cached image (no re-download).
         self.image_picker = self.derive_picker();
         self.art = None;
@@ -2313,7 +2313,7 @@ impl App {
 
     fn reauthenticate(&mut self) {
         match crate::config::clear_credentials() {
-            Ok(()) => self.status = "Signed out — restart SpoTUIfy to log in again.".to_string(),
+            Ok(()) => self.status = "Signed out – restart SpoTUIfy to log in again.".to_string(),
             Err(e) => self.status = format!("Sign out failed: {e}"),
         }
     }
@@ -2787,7 +2787,7 @@ impl App {
                 self.tracklist_state.select((count > 0).then_some(0));
                 self.view = View::Tracklist;
                 self.filter_query.clear();
-                self.status = format!("{} — {count} track(s)", self.context_title);
+                self.status = format!("{} – {count} track(s)", self.context_title);
                 // Best-effort: learn which of these are already liked.
                 let uris: Vec<String> =
                     self.context_tracks.iter().map(|t| t.uri.clone()).collect();
@@ -2865,7 +2865,7 @@ impl App {
             }
             Update::NewRelease(info) => {
                 self.status = format!(
-                    "Update available: v{} — {} (current v{})",
+                    "Update available: v{} – {} (current v{})",
                     info.latest,
                     info.url,
                     env!("CARGO_PKG_VERSION"),

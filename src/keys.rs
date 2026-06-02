@@ -309,7 +309,7 @@ impl Keymap {
     }
 
     /// The primary chord bound to `action`, formatted for display (e.g.
-    /// `Alt+u`), or `—` if nothing is bound. Used to label the update badge.
+    /// `Alt+u`), or `–` if nothing is bound. Used to label the update badge.
     pub fn display(&self, action: Action) -> String {
         let mut chords: Vec<Chord> = self
             .map
@@ -321,7 +321,7 @@ impl Keymap {
         chords
             .first()
             .map(|c| format_chord(*c))
-            .unwrap_or_else(|| "—".to_string())
+            .unwrap_or_else(|| "–".to_string())
     }
 
     /// `(keys, description)` rows for the help modal, in [`ALL_ACTIONS`] order.
@@ -337,7 +337,7 @@ impl Keymap {
                     .collect();
                 chords.sort_by_key(|c| format_chord(*c));
                 let keys = if chords.is_empty() {
-                    "—".to_string()
+                    "–".to_string()
                 } else {
                     chords.iter().map(|c| format_chord(*c)).collect::<Vec<_>>().join(" / ")
                 };

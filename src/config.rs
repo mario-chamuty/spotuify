@@ -15,11 +15,6 @@ use crate::theme::ThemeConfig;
 
 const APP_DIR: &str = "spotuify";
 
-/// serde default for boolean fields that should default to `true`.
-fn default_true() -> bool {
-    true
-}
-
 /// User-editable settings, serialized as TOML.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -27,7 +22,7 @@ pub struct Config {
     /// Spotify app **client id** for the Web API (search, playlists, library,
     /// playback control). Register a free app at
     /// <https://developer.spotify.com/dashboard> and add `redirect_uri` to it.
-    /// Audio *playback* uses Spotify's official client and needs no app — this is
+    /// Audio *playback* uses Spotify's official client and needs no app – this is
     /// only required for catalog and library features, because Spotify's 2026
     /// changes rate-limit the official client id on the Web API.
     pub client_id: String,
@@ -46,8 +41,9 @@ pub struct Config {
 
     /// Check GitHub for a newer release once at startup and show a status-bar
     /// badge if one exists. The update itself is opt-in (triggered from the
-    /// badge); set this to false to disable the check entirely.
-    #[serde(default = "default_true")]
+    /// badge); set this to false to disable the check entirely. Missing in an
+    /// older config file means `true` (via the container `#[serde(default)]`,
+    /// which falls back to `Config::default()`).
     pub check_for_updates: bool,
 
     /// librespot audio backend. "rodio" works everywhere via cpal.
@@ -202,7 +198,7 @@ impl Default for Config {
 
 impl Config {
     /// Load the config from disk. On first run a commented template is written
-    /// for reference and the defaults are used — no configuration is required to
+    /// for reference and the defaults are used – no configuration is required to
     /// run (authentication uses Spotify's official client id).
     pub fn load() -> Result<Self> {
         let path = config_path()?;
@@ -240,14 +236,14 @@ impl Config {
 #
 # Audio PLAYBACK uses Spotify's official client and needs no developer app.
 # Search and your LIBRARY use the Web API, which Spotify's 2026 changes
-# rate-limit on the official client id — so for those you must register a free
+# rate-limit on the official client id – so for those you must register a free
 # app and set `client_id` below:
 #   1. https://developer.spotify.com/dashboard  ->  Create app
 #   2. Add this Redirect URI to it:  http://127.0.0.1:8888/callback
 #   3. Copy the app's Client ID into `client_id`.
 #
-# The *real* Home tab — Daily Mix 1-6, Discover Weekly, Release Radar and
-# genre/mood shelves — works automatically when you're logged into Spotify in a
+# The *real* Home tab – Daily Mix 1-6, Discover Weekly, Release Radar and
+# genre/mood shelves – works automatically when you're logged into Spotify in a
 # local browser: SpoTUIfy auto-detects your `sp_dc` session cookie. Only set
 # `sp_dc` below to override that (e.g. if no logged-in browser was found): get
 # it from DevTools -> Application -> Cookies -> https://open.spotify.com. With

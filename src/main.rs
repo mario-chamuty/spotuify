@@ -1,4 +1,4 @@
-//! SpoTUIfy — a terminal Spotify client for Linux with local playback,
+//! SpoTUIfy – a terminal Spotify client for Linux with local playback,
 //! search, playlists, queues, output selection and colored album art.
 
 mod albumart;
@@ -186,12 +186,12 @@ fn relaunch() -> ! {
 }
 
 /// Mint a web-player token from the `sp_dc` cookie and print the real Home
-/// shelves. No auth, playback or TUI — purely a verification path.
+/// shelves. No auth, playback or TUI – purely a verification path.
 async fn probe_home(config: &Config) -> Result<()> {
     let sp_dc = cookie::resolve(&config.sp_dc);
     if sp_dc.trim().is_empty() {
         eprintln!(
-            "No `sp_dc` cookie found — couldn't auto-detect one from a browser, \
+            "No `sp_dc` cookie found – couldn't auto-detect one from a browser, \
              and none is set in config. Log into open.spotify.com in Firefox/Chrome, \
              or set `sp_dc` manually. See the README."
         );
@@ -232,7 +232,7 @@ async fn probe_home(config: &Config) -> Result<()> {
         })
         .collect();
 
-    println!("Got {} shelves — rendered as the Home tab draws them:\n", grid.len());
+    println!("Got {} shelves – rendered as the Home tab draws them:\n", grid.len());
     let (lines, _) = ui::home_grid_lines(&grid, (0, 0), theme::Theme::default(), 100);
     for line in &lines {
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();

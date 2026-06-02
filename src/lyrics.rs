@@ -1,16 +1,16 @@
 //! Lyrics for the now-playing track, from several sources tried in order.
 //!
-//! 1. **Spotify / Musixmatch** via librespot's lyrics endpoint — best quality,
+//! 1. **Spotify / Musixmatch** via librespot's lyrics endpoint – best quality,
 //!    usually time-synced. Fetched over the playback session.
-//! 2. **LRCLIB** (<https://lrclib.net>) — free, keyless; often has synced LRC.
-//! 3. **Genius** (<https://genius.com>) — broad catalogue; plain text only.
-//! 4. **KaraokeTexty** (<https://www.karaoketexty.cz>) — strong Czech/Slovak
+//! 2. **LRCLIB** (<https://lrclib.net>) – free, keyless; often has synced LRC.
+//! 3. **Genius** (<https://genius.com>) – broad catalogue; plain text only.
+//! 4. **KaraokeTexty** (<https://www.karaoketexty.cz>) – strong Czech/Slovak
 //!    coverage; plain text only.
 //!
 //! Every web source runs under a short timeout and is strictly best-effort: a
 //! failure or timeout just moves to the next source, so a slow network can
 //! never leave lyrics stuck "loading". Untrusted search results (Genius,
-//! KaraokeTexty) are validated against the requested artist + title — a
+//! KaraokeTexty) are validated against the requested artist + title – a
 //! mismatch is discarded rather than shown, so we never display wrong lyrics.
 
 use std::time::Duration;
@@ -77,7 +77,7 @@ impl Lyrics {
 
 /// Fetch lyrics for `track`: Spotify first, then web fallbacks in order.
 pub async fn fetch(session: &Session, track: &Track) -> Result<Lyrics> {
-    // 1. Spotify / Musixmatch via librespot — best quality, often time-synced.
+    // 1. Spotify / Musixmatch via librespot – best quality, often time-synced.
     match fetch_spotify(session, &track.uri).await {
         Ok(l) if !l.lines.is_empty() => return Ok(l),
         Ok(_) => tracing::debug!("spotify returned empty lyrics, trying fallbacks"),
@@ -497,7 +497,7 @@ fn clean_title(title: &str) -> String {
     out.trim().to_string()
 }
 
-/// Lowercase, strip diacritics, drop punctuation, collapse whitespace — so
+/// Lowercase, strip diacritics, drop punctuation, collapse whitespace – so
 /// "Voľnosť" and "volnost" compare equal.
 fn normalize(s: &str) -> String {
     let mut out = String::new();

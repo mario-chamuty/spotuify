@@ -2,7 +2,7 @@
 //!
 //! This is the only source of the real Home screen: **Daily Mix 1–6**,
 //! **Discover Weekly**, **Release Radar** and the **genre/mood shelves**. It
-//! needs a web-player access token (see [`crate::webtoken`]) — not the dev-app
+//! needs a web-player access token (see [`crate::webtoken`]) – not the dev-app
 //! token, which is RBAC-denied. Notably it does *not* need a client-token; a
 //! valid bearer token plus the `app-platform: WebPlayer` + Origin/Referer
 //! headers is enough.
@@ -44,7 +44,7 @@ pub struct ShelfItem {
 }
 
 /// Fetch the user's real Home shelves via pathfinder. Returns an error if no
-/// token can be minted or the API refuses — the caller should fall back to the
+/// token can be minted or the API refuses – the caller should fall back to the
 /// public shelves.
 pub async fn home_shelves(token: &WebToken) -> Result<Vec<Shelf>> {
     let access = token
@@ -144,7 +144,7 @@ async fn query_home(
     let v: Value = resp.json().await.context("parsing pathfinder JSON")?;
 
     // pathfinder returns HTTP 200 with an `errors` array for things like
-    // PersistedQueryNotFound (rotated hash) — treat those as failures so the
+    // PersistedQueryNotFound (rotated hash) – treat those as failures so the
     // previous-hash fallback kicks in.
     if let Some(msg) = v
         .get("errors")
