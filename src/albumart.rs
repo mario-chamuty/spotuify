@@ -39,11 +39,18 @@ pub fn render_into(app: &mut App, f: &mut Frame, area: Rect, cols: u16, rows: u1
         height: rows.min(area.height),
     };
 
-    // Pixel-graphics path. `StatefulImage` resizes/encodes to the area on first
-    // render and caches the encoding thereafter.
+    // Pixel-graphics path. Size the target to the largest *pixel-square* that
+    // fits, using the terminal's real cell aspect (font size), so the square
+    // cover fills the box exactly and stays centred — rather than the 2:1
+    // half-block square, which letterboxes and top-left-aligns under sixel.
+    let font = app.image_picker.map(|p| p.font_size());
     if let Some(pixel) = app.pixel_art.as_mut() {
+        let target = match font {
+            Some(fs) => centered_pixel_square(area, fs),
+            None => centered,
+        };
         let widget = ratatui_image::StatefulImage::default();
-        f.render_stateful_widget(widget, centered, &mut pixel.protocol);
+        f.render_stateful_widget(widget, target, &mut pixel.protocol);
         return true;
     }
 
@@ -53,6 +60,23 @@ pub fn render_into(app: &mut App, f: &mut Frame, area: Rect, cols: u16, rows: u1
             true
         }
         _ => false,
+    }
+}
+
+/// The largest centred cell rect inside `area` that is square in *pixels*, given
+/// the terminal's `font_size` (pixels per cell, width × height).
+fn centered_pixel_square(area: Rect, font_size: (u16, u16)) -> Rect {
+    let fw = font_size.0.max(1) as u32;
+    let fh = font_size.1.max(1) as u32;
+    // Largest square side in pixels that fits both dimensions.
+    let side = (area.width as u32 * fw).min(area.height as u32 * fh);
+    let w = ((side / fw) as u16).clamp(1, area.width);
+    let h = ((side / fh) as u16).clamp(1, area.height);
+    Rect {
+        x: area.x + (area.width - w) / 2,
+        y: area.y + (area.height - h) / 2,
+        width: w,
+        height: h,
     }
 }
 
