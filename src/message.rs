@@ -49,6 +49,13 @@ pub enum Update {
     },
     /// Assembled Home content.
     Home(Box<crate::spotify::Home>),
+    /// An artist page: top tracks plus albums and singles.
+    Artist {
+        name: String,
+        top_tracks: Vec<Track>,
+        albums: Vec<crate::spotify::AlbumRef>,
+        singles: Vec<crate::spotify::AlbumRef>,
+    },
     /// A newer release was found on GitHub.
     NewRelease(crate::update::UpdateInfo),
     Error(String),

@@ -20,6 +20,8 @@ pub struct AlbumRef {
     pub id: String,
     pub name: String,
     pub artists: String,
+    /// Spotify's release group: "album", "single" or "compilation".
+    pub album_type: String,
 }
 
 #[derive(Debug, Clone)]
@@ -722,6 +724,7 @@ fn album_ref(a: RawAlbumSearch) -> AlbumRef {
             .map(|x| x.name.as_str())
             .collect::<Vec<_>>()
             .join(", "),
+        album_type: a.album_type,
     }
 }
 
@@ -950,6 +953,8 @@ struct RawAlbumSearch {
     name: String,
     #[serde(default)]
     artists: Vec<RawNamed>,
+    #[serde(default)]
+    album_type: String,
 }
 
 #[derive(serde::Deserialize)]

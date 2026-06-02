@@ -38,6 +38,8 @@ pub enum View {
     Queue,
     Settings,
     Home,
+    /// Artist detail: top tracks + albums + singles (transient, like Tracklist).
+    Artist,
 }
 
 impl View {
@@ -51,7 +53,7 @@ impl View {
             View::Queue => Some(P::Queue),
             View::Settings => Some(P::Settings),
             View::Home => Some(P::Home),
-            View::Tracklist => None,
+            View::Tracklist | View::Artist => None,
         }
     }
 }
@@ -133,6 +135,18 @@ pub enum Focus {
     Filter,
 }
 
+/// A row in the Artist detail view. Headers are non-selectable section titles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArtistRow {
+    Header,
+    /// Index into `App::artist_top_tracks`.
+    Top(usize),
+    /// Index into `App::artist_albums`.
+    Album(usize),
+    /// Index into `App::artist_singles`.
+    Single(usize),
+}
+
 pub struct App {
     pub config: Config,
     pub spotify: Spotify,
@@ -175,10 +189,17 @@ pub struct App {
     pub playlists: Vec<crate::model::PlaylistRef>,
     pub library_state: ListState,
 
-    // Opened track list (playlist/album/artist/liked/search tracks)
+    // Opened track list (playlist/album/liked/search tracks)
     pub context_title: String,
     pub context_tracks: Vec<Track>,
     pub tracklist_state: ListState,
+
+    // Artist detail view: top tracks + albums + singles.
+    pub artist_title: String,
+    pub artist_top_tracks: Vec<Track>,
+    pub artist_albums: Vec<crate::spotify::AlbumRef>,
+    pub artist_singles: Vec<crate::spotify::AlbumRef>,
+    pub artist_state: ListState,
 
     // Queue + audio-output devices (selected from the Settings → Output section)
     pub queue_state: ListState,
@@ -357,6 +378,11 @@ impl App {
             context_title: String::new(),
             context_tracks: Vec::new(),
             tracklist_state: ListState::default(),
+            artist_title: String::new(),
+            artist_top_tracks: Vec::new(),
+            artist_albums: Vec::new(),
+            artist_singles: Vec::new(),
+            artist_state: ListState::default(),
             queue_state: ListState::default(),
             devices: Vec::new(),
             connect_devices: Vec::new(),
@@ -568,7 +594,7 @@ impl App {
 
         // Esc walks back through opened contexts.
         if key.code == KeyCode::Esc
-            && matches!(self.view, View::Tracklist | View::Search)
+            && matches!(self.view, View::Tracklist | View::Search | View::Artist)
             && !self.nav_stack.is_empty()
         {
             self.nav_back();
@@ -628,20 +654,24 @@ impl App {
             Action::Up => {
                 let len = self.current_list_len();
                 move_sel(self.active_state(), len, -1);
+                self.skip_artist_header(-1);
             }
             Action::Down => {
                 let len = self.current_list_len();
                 move_sel(self.active_state(), len, 1);
+                self.skip_artist_header(1);
             }
             Action::Top => {
                 if self.current_list_len() > 0 {
                     self.active_state().select(Some(0));
+                    self.skip_artist_header(1);
                 }
             }
             Action::Bottom => {
                 let len = self.current_list_len();
                 if len > 0 {
                     self.active_state().select(Some(len - 1));
+                    self.skip_artist_header(-1);
                 }
             }
             Action::Activate => self.activate_selection(),
@@ -735,14 +765,15 @@ impl App {
             View::Tracklist => View::Queue,
             View::Queue => View::Home,
             View::Home => View::Settings,
-            View::Settings => View::Search,
+            // Artist is a transient detail view; Tab leaves it for a real tab.
+            View::Settings | View::Artist => View::Search,
         };
         self.on_view_entered();
     }
 
     fn cycle_view_back(&mut self) {
         self.view = match self.view {
-            View::Search => View::Settings,
+            View::Search | View::Artist => View::Settings,
             View::Settings => View::Home,
             View::Home => View::Queue,
             View::Queue => View::Tracklist,
@@ -1148,6 +1179,7 @@ impl App {
             }
             View::Settings => self.setting_rows().len(),
             View::Home => self.home_items().len(),
+            View::Artist => self.artist_rows().len(),
         }
     }
 
@@ -1157,9 +1189,48 @@ impl App {
             View::Library => &mut self.library_state,
             View::Tracklist => &mut self.tracklist_state,
             View::Queue => &mut self.queue_state,
+            View::Artist => &mut self.artist_state,
             // Settings/Home have their own (arrow-driven) navigation.
             View::Settings | View::Home => &mut self.library_state,
         }
+    }
+
+    /// Rows of the Artist view in display order (headers are non-selectable).
+    pub fn artist_rows(&self) -> Vec<ArtistRow> {
+        let mut rows = Vec::new();
+        if !self.artist_top_tracks.is_empty() {
+            rows.push(ArtistRow::Header);
+            rows.extend((0..self.artist_top_tracks.len()).map(ArtistRow::Top));
+        }
+        if !self.artist_albums.is_empty() {
+            rows.push(ArtistRow::Header);
+            rows.extend((0..self.artist_albums.len()).map(ArtistRow::Album));
+        }
+        if !self.artist_singles.is_empty() {
+            rows.push(ArtistRow::Header);
+            rows.extend((0..self.artist_singles.len()).map(ArtistRow::Single));
+        }
+        rows
+    }
+
+    /// In the Artist view, nudge the selection off a (non-selectable) section
+    /// header in direction `dir`, wrapping.
+    fn skip_artist_header(&mut self, dir: isize) {
+        if self.view != View::Artist {
+            return;
+        }
+        let rows = self.artist_rows();
+        if rows.is_empty() {
+            return;
+        }
+        let mut sel = self.artist_state.selected().unwrap_or(0);
+        for _ in 0..rows.len() {
+            if !matches!(rows.get(sel), Some(ArtistRow::Header)) {
+                break;
+            }
+            sel = (sel as isize + dir).rem_euclid(rows.len() as isize) as usize;
+        }
+        self.artist_state.select(Some(sel));
     }
 
     // ---- Visible (filter-aware) index helpers used by the UI ---------------
@@ -1351,7 +1422,34 @@ impl App {
                     self.on_track_changed();
                 }
             }
+            View::Artist => self.activate_artist_selection(),
             View::Settings | View::Home => {} // handled by their own key handlers
+        }
+    }
+
+    /// Play the selected top track, or open the selected album/single.
+    fn activate_artist_selection(&mut self) {
+        let Some(sel) = self.artist_state.selected() else {
+            return;
+        };
+        match self.artist_rows().get(sel).copied() {
+            Some(ArtistRow::Top(i)) => {
+                // `play_tracks` ignores an empty queue, so no guard needed.
+                let tracks = self.artist_top_tracks.clone();
+                self.player.play_tracks(tracks, i);
+                self.on_track_changed();
+            }
+            Some(ArtistRow::Album(i)) => {
+                if let Some(a) = self.artist_albums.get(i) {
+                    self.spawn_open_album(a.id.clone(), a.name.clone(), OpenMode::Show);
+                }
+            }
+            Some(ArtistRow::Single(i)) => {
+                if let Some(a) = self.artist_singles.get(i) {
+                    self.spawn_open_album(a.id.clone(), a.name.clone(), OpenMode::Show);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1748,7 +1846,7 @@ impl App {
                 v.extend(self.playlists.iter().map(|p| p.name.clone()));
                 v
             }
-            View::Search | View::Settings | View::Home => Vec::new(),
+            View::Search | View::Settings | View::Home | View::Artist => Vec::new(),
         }
     }
 
@@ -2361,15 +2459,31 @@ impl App {
 
     fn spawn_open_artist(&mut self, id: String, name: String) {
         self.push_nav();
-        self.status = format!("Loading “{name}” albums…");
+        self.status = format!("Loading “{name}”…");
         let spotify = self.spotify.clone();
+        let session = self.player.session();
         let tx = self.updates_tx.clone();
         tokio::spawn(async move {
-            let msg = match spotify.artist_albums(&id).await {
-                Ok(albums) => Update::Search(SearchResults::Albums(albums)),
-                Err(e) => Update::Error(format!("{e:#}")),
+            // Top tracks come over the playback session (the Web API top-tracks
+            // endpoint is 403 for dev apps); albums/singles over the Web API.
+            let top_tracks = crate::browse::artist_top_tracks(&session, &id)
+                .await
+                .unwrap_or_default();
+            let refs = match spotify.artist_albums(&id).await {
+                Ok(refs) => refs,
+                Err(e) => {
+                    // Albums failed, but still show whatever top tracks we got.
+                    if top_tracks.is_empty() {
+                        let _ = tx.send(Update::Error(format!("{e:#}")));
+                        return;
+                    }
+                    Vec::new()
+                }
             };
-            let _ = tx.send(msg);
+            let is_single = |a: &crate::spotify::AlbumRef| a.album_type.eq_ignore_ascii_case("single");
+            let singles: Vec<_> = refs.iter().filter(|a| is_single(a)).cloned().collect();
+            let albums: Vec<_> = refs.iter().filter(|a| !is_single(a)).cloned().collect();
+            let _ = tx.send(Update::Artist { name, top_tracks, albums, singles });
         });
     }
 
@@ -2656,6 +2770,20 @@ impl App {
                 self.home_loading = false;
                 self.home_sel = (0, 0);
                 self.status = "Home".to_string();
+            }
+            Update::Artist { name, top_tracks, albums, singles } => {
+                self.artist_title = name.clone();
+                self.artist_top_tracks = top_tracks;
+                self.artist_albums = albums;
+                self.artist_singles = singles;
+                self.view = View::Artist;
+                // Select the first non-header row.
+                let first = self
+                    .artist_rows()
+                    .iter()
+                    .position(|r| !matches!(r, ArtistRow::Header));
+                self.artist_state.select(first);
+                self.status = name;
             }
             Update::NewRelease(info) => {
                 self.status = format!(

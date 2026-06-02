@@ -146,6 +146,8 @@ fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
         View::Queue => 3,
         View::Home => 4,
         View::Settings => 5,
+        // Artist is a transient detail view, not a tab — highlight none.
+        View::Artist => titles.len(),
     };
     let tabs = Tabs::new(titles.iter().map(|t| Span::raw(*t)).collect::<Vec<_>>())
         .select(selected)
@@ -161,6 +163,7 @@ fn render_main(f: &mut Frame, app: &mut App, area: Rect) {
         View::Library => render_library(f, app, area),
         View::Tracklist => render_tracklist(f, app, area),
         View::Queue => render_queue(f, app, area),
+        View::Artist => render_artist(f, app, area),
         View::Settings => render_settings(f, app, area),
         View::Home => render_home(f, app, area),
     }
@@ -303,6 +306,53 @@ fn render_queue(f: &mut Frame, app: &mut App, area: Rect) {
         .highlight_style(highlight(theme))
         .highlight_symbol("▶ ");
     f.render_stateful_widget(list, area, &mut app.queue_state);
+}
+
+/// Artist detail: a "Popular" section of top tracks, then "Albums" and
+/// "Singles & EPs" sections of openable releases. Row order matches
+/// `App::artist_rows` so the selection highlight lands correctly.
+fn render_artist(f: &mut Frame, app: &mut App, area: Rect) {
+    let theme = app.theme;
+    let playing_uri = app.player.current_track().map(|t| t.uri.clone());
+    let accent = Style::default().fg(theme.accent).add_modifier(Modifier::BOLD);
+    let header = |label: &str| ListItem::new(Line::from(Span::styled(label.to_string(), accent)));
+
+    let mut items: Vec<ListItem> = Vec::new();
+    if !app.artist_top_tracks.is_empty() {
+        items.push(header("Popular"));
+        for t in &app.artist_top_tracks {
+            let playing = playing_uri.as_deref() == Some(t.uri.as_str());
+            items.push(track_item(theme, &t.name, &t.artists, t.duration_ms, app.liked.contains(&t.uri), playing));
+        }
+    }
+    let mut album_row = |a: &crate::spotify::AlbumRef| {
+        ListItem::new(Line::from(vec![
+            Span::raw("  "),
+            Span::raw(a.name.clone()),
+        ]))
+    };
+    if !app.artist_albums.is_empty() {
+        items.push(header("Albums"));
+        items.extend(app.artist_albums.iter().map(&mut album_row));
+    }
+    if !app.artist_singles.is_empty() {
+        items.push(header("Singles & EPs"));
+        items.extend(app.artist_singles.iter().map(&mut album_row));
+    }
+
+    if items.is_empty() {
+        items.push(ListItem::new(Line::from(Span::styled(
+            "  Nothing to show for this artist.",
+            Style::default().fg(theme.dim),
+        ))));
+    }
+
+    let title = format!(" {} · Enter plays/opens · Esc back ", app.artist_title);
+    let list = List::new(items)
+        .block(panel(theme, title))
+        .highlight_style(highlight(theme))
+        .highlight_symbol("▶ ");
+    f.render_stateful_widget(list, area, &mut app.artist_state);
 }
 
 fn render_now_playing(f: &mut Frame, app: &mut App, area: Rect) {

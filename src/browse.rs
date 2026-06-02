@@ -9,7 +9,7 @@
 use anyhow::{Context, Result};
 use futures::stream::{self, StreamExt};
 use librespot::core::{Session, SpotifyId, SpotifyUri};
-use librespot::metadata::{Metadata, Track as LibrespotTrack};
+use librespot::metadata::{Artist as LibrespotArtist, Metadata, Track as LibrespotTrack};
 
 use crate::model::{PlayableKind, Track};
 
@@ -47,6 +47,49 @@ pub async fn playlist_tracks(session: &Session, playlist: &str) -> Result<Vec<Tr
     }
 
     // Fetch metadata concurrently, then restore playlist order by index.
+    let mut indexed: Vec<(usize, Option<Track>)> = stream::iter(uris.into_iter().enumerate())
+        .map(|(i, u)| async move { (i, fetch_track(session, &u).await) })
+        .buffer_unordered(CONCURRENCY)
+        .collect()
+        .await;
+    indexed.sort_by_key(|(i, _)| *i);
+    Ok(indexed.into_iter().filter_map(|(_, t)| t).collect())
+}
+
+/// The artist's most-played tracks, via the playback session (the Web API's
+/// `/artists/{id}/top-tracks` is 403 for development-mode apps). Resolves each
+/// top-track id's full metadata, in popularity order.
+pub async fn artist_top_tracks(session: &Session, artist: &str) -> Result<Vec<Track>> {
+    let uri = if artist.starts_with("spotify:") {
+        artist.to_string()
+    } else {
+        format!("spotify:artist:{artist}")
+    };
+    let su = SpotifyUri::from_uri(&uri).context("bad artist uri")?;
+    let meta = LibrespotArtist::get(session, &su)
+        .await
+        .context("fetching artist metadata")?;
+
+    // Top tracks are listed per country; prefer the account's, else the first
+    // non-empty list.
+    let country = session.country();
+    let chosen = meta
+        .top_tracks
+        .0
+        .iter()
+        .find(|t| t.country == country && !t.tracks.0.is_empty())
+        .or_else(|| meta.top_tracks.0.iter().find(|t| !t.tracks.0.is_empty()));
+    let Some(top) = chosen else {
+        return Ok(Vec::new());
+    };
+    let uris: Vec<String> = top
+        .tracks
+        .0
+        .iter()
+        .take(10)
+        .filter_map(|u| u.to_uri().ok())
+        .collect();
+
     let mut indexed: Vec<(usize, Option<Track>)> = stream::iter(uris.into_iter().enumerate())
         .map(|(i, u)| async move { (i, fetch_track(session, &u).await) })
         .buffer_unordered(CONCURRENCY)
