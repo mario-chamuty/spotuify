@@ -43,7 +43,7 @@ pub fn detect_sp_dc() -> Option<String> {
             candidates.push((t, db, Browser::Chromium));
         }
     }
-    // Newest-used profile first — most likely to hold a live session.
+    // Newest-used profile first – most likely to hold a live session.
     candidates.sort_by_key(|(t, _, _)| std::cmp::Reverse(*t));
 
     for (_, db, browser) in candidates {

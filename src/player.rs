@@ -294,7 +294,7 @@ impl Player {
             }
             Status::Paused => {
                 // A restored session hasn't loaded the track into librespot
-                // yet — load it at the saved position on the first play.
+                // yet – load it at the saved position on the first play.
                 if !self.loaded {
                     if let Some(uri) = self.current_id.clone() {
                         self.inner.load(uri, true, self.position_ms);
@@ -599,7 +599,7 @@ impl Player {
     }
 
     fn random_index(&mut self) -> usize {
-        // xorshift64 — good enough for shuffle, no extra dependency.
+        // xorshift64 – good enough for shuffle, no extra dependency.
         let mut x = self.rng_state;
         x ^= x << 13;
         x ^= x >> 7;

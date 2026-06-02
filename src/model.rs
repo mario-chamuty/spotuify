@@ -26,10 +26,10 @@ pub struct Track {
     pub duration_ms: u32,
     #[serde(default = "default_kind")]
     pub kind: PlayableKind,
-    /// Primary artist `(id, name)` when known — used to open the artist.
+    /// Primary artist `(id, name)` when known – used to open the artist.
     #[serde(default)]
     pub artist: Option<(String, String)>,
-    /// Album id when known — used to open the album.
+    /// Album id when known – used to open the album.
     #[serde(default)]
     pub album_id: Option<String>,
 }

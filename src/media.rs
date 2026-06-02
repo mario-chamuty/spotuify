@@ -245,7 +245,13 @@ fn run(controls: UnboundedSender<Action>, mut state: watch::Receiver<Snapshot>) 
         SetTimer(hwnd, 1, POLL.as_millis() as u32, None);
 
         let mut msg = MSG::default();
-        while GetMessageW(&mut msg, HWND(0), 0, 0).as_bool() {
+        loop {
+            // GetMessageW returns 0 on WM_QUIT and -1 on error; stop on either so
+            // we never dispatch an uninitialized message.
+            let ret = GetMessageW(&mut msg, HWND(0), 0, 0).0;
+            if ret <= 0 {
+                break;
+            }
             if msg.message == WM_TIMER && state.has_changed().unwrap_or(false) {
                 let snap = state.borrow_and_update().clone();
                 sync(&mut mc, &snap);

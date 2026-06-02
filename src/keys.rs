@@ -59,6 +59,9 @@ pub enum Action {
     ToggleVisualizer,
     LyricsScrollUp,
     LyricsScrollDown,
+    // Update badge
+    UpdateNow,
+    DismissUpdate,
 }
 
 impl Action {
@@ -105,6 +108,8 @@ impl Action {
             Action::ToggleVisualizer => "toggle-visualizer",
             Action::LyricsScrollUp => "lyrics-scroll-up",
             Action::LyricsScrollDown => "lyrics-scroll-down",
+            Action::UpdateNow => "update-now",
+            Action::DismissUpdate => "dismiss-update",
         }
     }
 
@@ -151,6 +156,8 @@ impl Action {
             Action::ToggleVisualizer => "Toggle the spectrum visualizer",
             Action::LyricsScrollUp => "Scroll lyrics up",
             Action::LyricsScrollDown => "Scroll lyrics down",
+            Action::UpdateNow => "Download & install the available update",
+            Action::DismissUpdate => "Dismiss the update notification",
         }
     }
 
@@ -200,6 +207,8 @@ const ALL_ACTIONS: &[Action] = &[
     Action::ToggleLyrics,
     Action::ToggleEqualizer,
     Action::ToggleVisualizer,
+    Action::UpdateNow,
+    Action::DismissUpdate,
 ];
 
 /// Compiled-in default chords for each action, as parseable strings.
@@ -245,6 +254,8 @@ fn default_bindings() -> Vec<(Action, &'static [&'static str])> {
         (Action::ToggleVisualizer, &["v"]),
         (Action::LyricsScrollDown, &["pagedown"]),
         (Action::LyricsScrollUp, &["pageup"]),
+        (Action::UpdateNow, &["alt+u"]),
+        (Action::DismissUpdate, &["alt+d"]),
     ]
 }
 
@@ -297,6 +308,22 @@ impl Keymap {
         self.map.get(&normalize(code, modifiers)).copied()
     }
 
+    /// The primary chord bound to `action`, formatted for display (e.g.
+    /// `Alt+u`), or `–` if nothing is bound. Used to label the update badge.
+    pub fn display(&self, action: Action) -> String {
+        let mut chords: Vec<Chord> = self
+            .map
+            .iter()
+            .filter(|(_, &a)| a == action)
+            .map(|(&c, _)| c)
+            .collect();
+        chords.sort_by_key(|c| format_chord(*c));
+        chords
+            .first()
+            .map(|c| format_chord(*c))
+            .unwrap_or_else(|| "–".to_string())
+    }
+
     /// `(keys, description)` rows for the help modal, in [`ALL_ACTIONS`] order.
     pub fn help_rows(&self) -> Vec<(String, &'static str)> {
         ALL_ACTIONS
@@ -310,7 +337,7 @@ impl Keymap {
                     .collect();
                 chords.sort_by_key(|c| format_chord(*c));
                 let keys = if chords.is_empty() {
-                    "—".to_string()
+                    "–".to_string()
                 } else {
                     chords.iter().map(|c| format_chord(*c)).collect::<Vec<_>>().join(" / ")
                 };

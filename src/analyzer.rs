@@ -1,8 +1,8 @@
 //! Real-time spectrum analysis.
 //!
 //! Rather than an FFT (which would need a shared sample buffer and allocation
-//! on the audio thread), we run the audio through a bank of bandpass biquads —
-//! one per EQ band — and publish each band's RMS energy through atomics. The
+//! on the audio thread), we run the audio through a bank of bandpass biquads –
+//! one per EQ band – and publish each band's RMS energy through atomics. The
 //! probe lives in the audio path ([`crate::eq::EqSink`]); the UI reads the
 //! shared [`SpectrumState`].
 

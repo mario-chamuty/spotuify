@@ -1,6 +1,6 @@
 //! Session persistence: the queue, current selection, playback position and a
 //! few preferences are serialized to `~/.cache/spotuify/state.json` on quit and
-//! restored on launch (paused — playback is never auto-started).
+//! restored on launch (paused – playback is never auto-started).
 
 use std::path::PathBuf;
 
@@ -30,7 +30,7 @@ pub struct PersistedState {
 }
 
 /// Serializable mirror of the stable [`crate::app::View`] tabs. Transient views
-/// (a track list opened from search) are not persisted — the data behind them
+/// (a track list opened from search) are not persisted – the data behind them
 /// isn't restored, so reopening to them would show an empty pane.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

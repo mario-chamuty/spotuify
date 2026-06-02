@@ -69,8 +69,21 @@ jobs:
         shell: pwsh
         run: Compress-Archive -Path "target/${{ matrix.target }}/release/spotuify.exe" -DestinationPath "${{ matrix.archive }}"
 
+      # Publish a bare lowercase SHA-256 hex digest alongside each archive so the
+      # in-app self-updater can verify the download before swapping the binary.
+      - name: Checksum (Unix)
+        if: runner.os != 'Windows'
+        run: shasum -a 256 "${{ matrix.archive }}" | cut -d ' ' -f1 > "${{ matrix.archive }}.sha256"
+
+      - name: Checksum (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: (Get-FileHash -Algorithm SHA256 "${{ matrix.archive }}").Hash.ToLower() | Out-File -Encoding ascii -NoNewline "${{ matrix.archive }}.sha256"
+
       - name: Attach to release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ matrix.archive }}
+          files: |
+            ${{ matrix.archive }}
+            ${{ matrix.archive }}.sha256
           fail_on_unmatched_files: true
