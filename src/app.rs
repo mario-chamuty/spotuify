@@ -733,18 +733,18 @@ impl App {
             View::Search => View::Library,
             View::Library => View::Tracklist,
             View::Tracklist => View::Queue,
-            View::Queue => View::Settings,
-            View::Settings => View::Home,
-            View::Home => View::Search,
+            View::Queue => View::Home,
+            View::Home => View::Settings,
+            View::Settings => View::Search,
         };
         self.on_view_entered();
     }
 
     fn cycle_view_back(&mut self) {
         self.view = match self.view {
-            View::Search => View::Home,
-            View::Home => View::Settings,
-            View::Settings => View::Queue,
+            View::Search => View::Settings,
+            View::Settings => View::Home,
+            View::Home => View::Queue,
             View::Queue => View::Tracklist,
             View::Tracklist => View::Library,
             View::Library => View::Search,

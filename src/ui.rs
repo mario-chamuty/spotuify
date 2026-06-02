@@ -137,15 +137,15 @@ fn render_help(f: &mut Frame, app: &App, area: Rect) {
 fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
     let theme = app.theme;
     let titles = [
-        "1 Search", "2 Library", "3 Tracks", "4 Queue", "5 Settings", "6 Home",
+        "1 Search", "2 Library", "3 Tracks", "4 Queue", "5 Home", "6 Settings",
     ];
     let selected = match app.view {
         View::Search => 0,
         View::Library => 1,
         View::Tracklist => 2,
         View::Queue => 3,
-        View::Settings => 4,
-        View::Home => 5,
+        View::Home => 4,
+        View::Settings => 5,
     };
     let tabs = Tabs::new(titles.iter().map(|t| Span::raw(*t)).collect::<Vec<_>>())
         .select(selected)

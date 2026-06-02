@@ -9,7 +9,7 @@ Linux-only).
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ 1 Search   2 Library   3 Tracks   4 Queue   5 Settings   6 Home          │
+│ 1 Search   2 Library   3 Tracks   4 Queue   5 Home   6 Settings          │
 ├─────────────────────────────────────┬────────────────────────────────────┤
 │ Search results                      │ Now Playing                        │
 │ > Midnight City - M83      4:03     │            ▄▄▄▄▄▄▄▄▄▄▄▄            │
@@ -63,7 +63,7 @@ Configurable via `[keys]`. Defaults:
 
 | Key | Action |
 | --- | --- |
-| `1` to `6` | Switch tab (Search, Library, Tracks, Queue, Settings, Home) |
+| `1` to `6` | Switch tab (Search, Library, Tracks, Queue, Home, Settings) |
 | `Tab` / `Shift+Tab` | Next / previous tab |
 | `/` · `i` | Filter the current list · focus search box (`↑↓` recalls history) |
 | Arrows or `hjkl` · `g` / `G` | Move · jump top/bottom |
