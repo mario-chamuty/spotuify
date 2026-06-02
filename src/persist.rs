@@ -38,9 +38,11 @@ pub enum PersistedView {
     Search,
     Library,
     Queue,
-    Devices,
     Settings,
     Home,
+    /// Legacy: the Output tab was merged into Settings. Kept so old state files
+    /// still parse; it maps to [`crate::app::View::Settings`] on load.
+    Devices,
 }
 
 /// Serializable mirror of [`crate::player::Repeat`].

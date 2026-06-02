@@ -9,7 +9,7 @@ Linux-only).
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ 1 Search   2 Library   3 Tracks   4 Queue   5 Output                     │
+│ 1 Search   2 Library   3 Tracks   4 Queue   5 Settings   6 Home          │
 ├─────────────────────────────────────┬────────────────────────────────────┤
 │ Search results                      │ Now Playing                        │
 │ > Midnight City - M83      4:03     │            ▄▄▄▄▄▄▄▄▄▄▄▄            │
@@ -63,7 +63,7 @@ Configurable via `[keys]`. Defaults:
 
 | Key | Action |
 | --- | --- |
-| `1` to `7` | Switch tab (Search, Library, Tracks, Queue, Output, Settings, Home) |
+| `1` to `6` | Switch tab (Search, Library, Tracks, Queue, Settings, Home) |
 | `Tab` / `Shift+Tab` | Next / previous tab |
 | `/` · `i` | Filter the current list · focus search box (`↑↓` recalls history) |
 | Arrows or `hjkl` · `g` / `G` | Move · jump top/bottom |
@@ -120,7 +120,7 @@ Logs at `~/.cache/spotuify/spotuify.log` (`RUST_LOG` adjusts level). Session at
 
 - Tracks won't play: `cargo run --example probe` reports whether they resolve.
 - Login fails: account must be Premium; `redirect_uri` must match exactly.
-- No sound but "Playing": pick a device in the Output tab.
+- No sound but "Playing": pick a device in Settings, under Output.
 - Reauth from scratch: delete `~/.cache/spotuify/`.
 
 ## License

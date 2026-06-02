@@ -137,16 +137,15 @@ fn render_help(f: &mut Frame, app: &App, area: Rect) {
 fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
     let theme = app.theme;
     let titles = [
-        "1 Search", "2 Library", "3 Tracks", "4 Queue", "5 Output", "6 Settings", "7 Home",
+        "1 Search", "2 Library", "3 Tracks", "4 Queue", "5 Settings", "6 Home",
     ];
     let selected = match app.view {
         View::Search => 0,
         View::Library => 1,
         View::Tracklist => 2,
         View::Queue => 3,
-        View::Devices => 4,
-        View::Settings => 5,
-        View::Home => 6,
+        View::Settings => 4,
+        View::Home => 5,
     };
     let tabs = Tabs::new(titles.iter().map(|t| Span::raw(*t)).collect::<Vec<_>>())
         .select(selected)
@@ -162,7 +161,6 @@ fn render_main(f: &mut Frame, app: &mut App, area: Rect) {
         View::Library => render_library(f, app, area),
         View::Tracklist => render_tracklist(f, app, area),
         View::Queue => render_queue(f, app, area),
-        View::Devices => render_devices(f, app, area),
         View::Settings => render_settings(f, app, area),
         View::Home => render_home(f, app, area),
     }
@@ -305,57 +303,6 @@ fn render_queue(f: &mut Frame, app: &mut App, area: Rect) {
         .highlight_style(highlight(theme))
         .highlight_symbol("▶ ");
     f.render_stateful_widget(list, area, &mut app.queue_state);
-}
-
-fn render_devices(f: &mut Frame, app: &mut App, area: Rect) {
-    let theme = app.theme;
-    let mut items: Vec<ListItem> = Vec::new();
-    let active_remote = app.active_remote_device_id();
-    let local_active = active_remote.is_none();
-    let local_dev = app.player.current_device();
-
-    items.push(section_header(theme, "Local audio output (librespot)"));
-    for d in &app.devices {
-        let is_active = local_active
-            && match local_dev {
-                Some(name) => d.name == name,
-                None => d.is_default,
-            };
-        let dot = if is_active { "● " } else { "○ " };
-        let suffix = if d.is_default { "  (system default)" } else { "" };
-        items.push(ListItem::new(Line::from(vec![
-            Span::styled(dot, Style::default().fg(if is_active { theme.accent } else { theme.dim })),
-            Span::raw(d.name.clone()),
-            Span::styled(suffix, Style::default().fg(theme.dim)),
-        ])));
-    }
-
-    if !app.connect_devices.is_empty() {
-        items.push(section_header(theme, "Spotify Connect devices"));
-        for d in &app.connect_devices {
-            // Active if we transferred to it, or the server reports it active.
-            let is_active = match &active_remote {
-                Some(id) => Some(id.as_str()) == d.id.as_deref(),
-                None => d.is_active,
-            };
-            let dot = if is_active { "● " } else { "○ " };
-            let vol = d
-                .volume_percent
-                .map(|v| format!(" · {v}%"))
-                .unwrap_or_default();
-            items.push(ListItem::new(Line::from(vec![
-                Span::styled(dot, Style::default().fg(if is_active { theme.accent } else { theme.dim })),
-                Span::raw(d.name.clone()),
-                Span::styled(format!("  ({}{})", d.kind, vol), Style::default().fg(theme.dim)),
-            ])));
-        }
-    }
-
-    let list = List::new(items)
-        .block(panel(theme, " Output · Enter selects (local or Connect) "))
-        .highlight_style(highlight(theme))
-        .highlight_symbol("▶ ");
-    f.render_stateful_widget(list, area, &mut app.device_state);
 }
 
 fn render_now_playing(f: &mut Frame, app: &mut App, area: Rect) {
@@ -886,7 +833,8 @@ fn render_settings(f: &mut Frame, app: &App, area: Rect) {
     use crate::eq::{LABELS, MAX_DB};
     let theme = app.theme;
     let eq = app.player.eq();
-    let rows = SettingRow::all();
+    let rows = app.setting_rows();
+    let dim = Style::default().fg(theme.dim);
 
     let header = |label: &str| {
         Line::from(Span::styled(
@@ -895,8 +843,15 @@ fn render_settings(f: &mut Frame, app: &App, area: Rect) {
         ))
     };
 
+    // Active-output state for the Output section's ●/○ indicators.
+    let active_remote = app.active_remote_device_id();
+    let local_active = active_remote.is_none();
+    let local_dev = app.player.current_device();
+    let mut output_header_done = false;
+
     let mut lines: Vec<Line> = vec![header("Playback")];
     for (i, row) in rows.iter().enumerate() {
+        // Section headers.
         match row {
             SettingRow::EqEnabled => {
                 lines.push(Line::from(""));
@@ -906,13 +861,82 @@ fn render_settings(f: &mut Frame, app: &App, area: Rect) {
                 lines.push(Line::from(""));
                 lines.push(header("Appearance"));
             }
+            SettingRow::OutputLocal(_) if !output_header_done => {
+                lines.push(Line::from(""));
+                lines.push(header("Output · Enter selects"));
+                output_header_done = true;
+            }
+            SettingRow::OutputConnect(j) => {
+                if !output_header_done {
+                    lines.push(Line::from(""));
+                    lines.push(header("Output · Enter selects"));
+                    output_header_done = true;
+                }
+                // Sub-header before the first Connect device.
+                if *j == 0 {
+                    lines.push(Line::from(Span::styled("   Spotify Connect", dim)));
+                }
+            }
             SettingRow::ReAuth => {
                 lines.push(Line::from(""));
                 lines.push(header("Account"));
                 lines.push(Line::from(Span::styled(
                     format!("   logged in as {}", app.player.username()),
-                    Style::default().fg(theme.dim),
+                    dim,
                 )));
+            }
+            _ => {}
+        }
+
+        let selected = i == app.settings_sel;
+        let marker = if selected { "▶ " } else { "  " };
+        let label_style = if selected {
+            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        let value_style = if selected {
+            Style::default().fg(theme.accent)
+        } else {
+            dim
+        };
+
+        // Output device rows render with an active-state dot rather than a value.
+        match *row {
+            SettingRow::OutputLocal(di) => {
+                if let Some(d) = app.devices.get(di) {
+                    let is_active = local_active
+                        && match local_dev {
+                            Some(name) => d.name == name,
+                            None => d.is_default,
+                        };
+                    let dot = if is_active { "● " } else { "○ " };
+                    let suffix = if d.is_default { "  (system default)" } else { "" };
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("  {marker}"), label_style),
+                        Span::styled(dot, Style::default().fg(if is_active { theme.accent } else { theme.dim })),
+                        Span::styled(d.name.clone(), label_style),
+                        Span::styled(suffix, dim),
+                    ]));
+                }
+                continue;
+            }
+            SettingRow::OutputConnect(di) => {
+                if let Some(d) = app.connect_devices.get(di) {
+                    let is_active = match &active_remote {
+                        Some(id) => Some(id.as_str()) == d.id.as_deref(),
+                        None => d.is_active,
+                    };
+                    let dot = if is_active { "● " } else { "○ " };
+                    let vol = d.volume_percent.map(|v| format!(" · {v}%")).unwrap_or_default();
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("  {marker}"), label_style),
+                        Span::styled(dot, Style::default().fg(if is_active { theme.accent } else { theme.dim })),
+                        Span::styled(d.name.clone(), label_style),
+                        Span::styled(format!("  ({}{})", d.kind, vol), dim),
+                    ]));
+                }
+                continue;
             }
             _ => {}
         }
@@ -947,27 +971,17 @@ fn render_settings(f: &mut Frame, app: &App, area: Rect) {
                 ("Album art".to_string(), format!("{:?}", app.config.art_mode).to_lowercase())
             }
             SettingRow::ReAuth => ("Re-authenticate".to_string(), "press Enter".to_string()),
+            // Output rows handled above (with `continue`).
+            SettingRow::OutputLocal(_) | SettingRow::OutputConnect(_) => unreachable!(),
         };
 
-        let selected = i == app.settings_sel;
-        let marker = if selected { "▶ " } else { "  " };
-        let label_style = if selected {
-            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
-        let value_style = if selected {
-            Style::default().fg(theme.accent)
-        } else {
-            Style::default().fg(theme.dim)
-        };
         lines.push(Line::from(vec![
             Span::styled(format!("  {marker}{label:<14}"), label_style),
             Span::styled(value, value_style),
         ]));
     }
 
-    let block = panel(theme, " Settings · ↑↓ select · ←→ change · Enter toggle/reset ");
+    let block = panel(theme, " Settings · ↑↓ select · ←→ change · Enter toggle/select ");
     f.render_widget(Paragraph::new(Text::from(lines)).block(block), area);
 }
 
@@ -980,13 +994,6 @@ fn library_title(app: &App, base: &str) -> String {
     } else {
         format!(" {base} ")
     }
-}
-
-fn section_header(theme: Theme, label: &str) -> ListItem<'static> {
-    ListItem::new(Line::from(Span::styled(
-        label.to_string(),
-        Style::default().fg(theme.dim).add_modifier(Modifier::BOLD),
-    )))
 }
 
 fn on_off(b: bool) -> &'static str {

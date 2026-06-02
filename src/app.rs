@@ -36,7 +36,6 @@ pub enum View {
     Library,
     Tracklist,
     Queue,
-    Devices,
     Settings,
     Home,
 }
@@ -50,7 +49,6 @@ impl View {
             View::Search => Some(P::Search),
             View::Library => Some(P::Library),
             View::Queue => Some(P::Queue),
-            View::Devices => Some(P::Devices),
             View::Settings => Some(P::Settings),
             View::Home => Some(P::Home),
             View::Tracklist => None,
@@ -65,8 +63,7 @@ impl From<crate::persist::PersistedView> for View {
             P::Search => View::Search,
             P::Library => View::Library,
             P::Queue => View::Queue,
-            P::Devices => View::Devices,
-            P::Settings => View::Settings,
+            P::Settings | P::Devices => View::Settings,
             P::Home => View::Home,
         }
     }
@@ -122,24 +119,11 @@ pub enum SettingRow {
     EqPreset,
     EqBand(usize),
     ArtMode,
+    /// A local audio-output device (index into `App::devices`).
+    OutputLocal(usize),
+    /// A Spotify Connect device (index into `App::connect_devices`).
+    OutputConnect(usize),
     ReAuth,
-}
-
-impl SettingRow {
-    /// All rows in display order.
-    pub fn all() -> Vec<SettingRow> {
-        let mut v = vec![
-            SettingRow::Normalisation,
-            SettingRow::Quality,
-            SettingRow::Volume,
-            SettingRow::EqEnabled,
-            SettingRow::EqPreset,
-        ];
-        v.extend((0..crate::eq::BANDS).map(SettingRow::EqBand));
-        v.push(SettingRow::ArtMode);
-        v.push(SettingRow::ReAuth);
-        v
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,16 +131,6 @@ pub enum Focus {
     List,
     Input,
     Filter,
-}
-
-/// A rendered row in the Devices view. Headers are non-selectable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DeviceRow {
-    Header,
-    /// Index into `App::devices` (local audio output).
-    Local(usize),
-    /// Index into `App::connect_devices` (Spotify Connect).
-    Connect(usize),
 }
 
 pub struct App {
@@ -206,10 +180,9 @@ pub struct App {
     pub context_tracks: Vec<Track>,
     pub tracklist_state: ListState,
 
-    // Queue + devices
+    // Queue + audio-output devices (selected from the Settings → Output section)
     pub queue_state: ListState,
     pub devices: Vec<OutputDevice>,
-    pub device_state: ListState,
 
     // Spotify Connect (Web API) remote devices and remote-control state.
     pub connect_devices: Vec<crate::model::ConnectDevice>,
@@ -268,7 +241,7 @@ pub struct App {
     /// Help modal (`?`): lists every keybinding.
     pub help_open: bool,
 
-    /// Selected row in the Settings view (index into `SettingRow::all()`).
+    /// Selected row in the Settings view (index into [`App::setting_rows`]).
     pub settings_sel: usize,
 
     // Spectrum analyzer.
@@ -386,7 +359,6 @@ impl App {
             tracklist_state: ListState::default(),
             queue_state: ListState::default(),
             devices: Vec::new(),
-            device_state: ListState::default(),
             connect_devices: Vec::new(),
             remote_device_id: None,
             remote_state: None,
@@ -480,7 +452,7 @@ impl App {
         let mut control_rx = self.control_rx.take();
 
         self.spawn_load_playlists();
-        self.refresh_devices();
+        self.refresh_output_devices();
         self.spawn_check_update();
 
         while !self.should_quit {
@@ -644,8 +616,7 @@ impl App {
             Action::TabLibrary => self.goto_library(),
             Action::TabTracks => self.view = View::Tracklist,
             Action::TabQueue => self.view = View::Queue,
-            Action::TabDevices => self.goto_devices(),
-            Action::TabSettings => self.view = View::Settings,
+            Action::TabSettings => self.goto_settings(),
             Action::TabHome => self.goto_home(),
             Action::CycleTab => self.cycle_view(),
             Action::Help => self.show_help(),
@@ -761,8 +732,7 @@ impl App {
             View::Search => View::Library,
             View::Library => View::Tracklist,
             View::Tracklist => View::Queue,
-            View::Queue => View::Devices,
-            View::Devices => View::Settings,
+            View::Queue => View::Settings,
             View::Settings => View::Home,
             View::Home => View::Search,
         };
@@ -773,8 +743,7 @@ impl App {
         self.view = match self.view {
             View::Search => View::Home,
             View::Home => View::Settings,
-            View::Settings => View::Devices,
-            View::Devices => View::Queue,
+            View::Settings => View::Queue,
             View::Queue => View::Tracklist,
             View::Tracklist => View::Library,
             View::Library => View::Search,
@@ -786,8 +755,8 @@ impl App {
     fn on_view_entered(&mut self) {
         if self.view == View::Library {
             self.goto_library();
-        } else if self.view == View::Devices {
-            self.goto_devices();
+        } else if self.view == View::Settings {
+            self.refresh_output_devices();
         } else if self.view == View::Home {
             self.goto_home();
         }
@@ -1069,18 +1038,34 @@ impl App {
         }
     }
 
-    fn goto_devices(&mut self) {
-        self.view = View::Devices;
-        self.refresh_devices();
+    fn goto_settings(&mut self) {
+        self.view = View::Settings;
+        self.refresh_output_devices();
+    }
+
+    /// Refresh the audio-output device list shown in Settings → Output (local
+    /// devices synchronously, Spotify Connect devices in the background).
+    fn refresh_output_devices(&mut self) {
+        self.devices = audio::output_devices();
         self.spawn_refresh_connect_devices();
     }
 
-    fn refresh_devices(&mut self) {
-        self.devices = audio::output_devices();
-        // Select the first selectable row (skip the leading header).
-        let rows = self.device_rows();
-        let idx = rows.iter().position(|r| !matches!(r, DeviceRow::Header));
-        self.device_state.select(idx.or(Some(0)));
+    /// All Settings rows in display order, including the live Output device
+    /// list (local outputs then Spotify Connect devices).
+    pub fn setting_rows(&self) -> Vec<SettingRow> {
+        let mut v = vec![
+            SettingRow::Normalisation,
+            SettingRow::Quality,
+            SettingRow::Volume,
+            SettingRow::EqEnabled,
+            SettingRow::EqPreset,
+        ];
+        v.extend((0..crate::eq::BANDS).map(SettingRow::EqBand));
+        v.push(SettingRow::ArtMode);
+        v.extend((0..self.devices.len()).map(SettingRow::OutputLocal));
+        v.extend((0..self.connect_devices.len()).map(SettingRow::OutputConnect));
+        v.push(SettingRow::ReAuth);
+        v
     }
 
     /// Fetch the user's Spotify Connect devices in the background.
@@ -1097,7 +1082,6 @@ impl App {
         });
     }
 
-    /// Poll remote playback state (only meaningful in remote mode).
     /// If the playback session's connection has dropped, rebuild it so songs
     /// keep loading without a restart. Throttled so a persistent failure (e.g.
     /// offline) doesn't stall the UI on every poll.
@@ -1161,8 +1145,7 @@ impl App {
                     self.player.queue.len()
                 }
             }
-            View::Devices => self.device_rows().len(),
-            View::Settings => SettingRow::all().len(),
+            View::Settings => self.setting_rows().len(),
             View::Home => self.home_items().len(),
         }
     }
@@ -1173,7 +1156,6 @@ impl App {
             View::Library => &mut self.library_state,
             View::Tracklist => &mut self.tracklist_state,
             View::Queue => &mut self.queue_state,
-            View::Devices => &mut self.device_state,
             // Settings/Home have their own (arrow-driven) navigation.
             View::Settings | View::Home => &mut self.library_state,
         }
@@ -1206,21 +1188,6 @@ impl App {
         } else {
             (0..self.playlists.len() + 1).collect()
         }
-    }
-
-    /// All rendered rows of the Devices view, including non-selectable headers.
-    pub fn device_rows(&self) -> Vec<DeviceRow> {
-        let mut rows = vec![DeviceRow::Header];
-        for i in 0..self.devices.len() {
-            rows.push(DeviceRow::Local(i));
-        }
-        if !self.connect_devices.is_empty() {
-            rows.push(DeviceRow::Header);
-            for i in 0..self.connect_devices.len() {
-                rows.push(DeviceRow::Connect(i));
-            }
-        }
-        rows
     }
 
     // ---- Playback state accessors (local or remote) ------------------------
@@ -1383,7 +1350,6 @@ impl App {
                     self.on_track_changed();
                 }
             }
-            View::Devices => self.activate_device_selection(),
             View::Settings | View::Home => {} // handled by their own key handlers
         }
     }
@@ -1455,17 +1421,6 @@ impl App {
             self.spawn_liked();
         } else if let Some(p) = self.playlists.get(i - 1) {
             self.spawn_open_playlist(p.id.clone(), p.name.clone(), OpenMode::Show);
-        }
-    }
-
-    fn activate_device_selection(&mut self) {
-        let Some(sel) = self.device_state.selected() else {
-            return;
-        };
-        match self.device_rows().get(sel).copied() {
-            Some(DeviceRow::Local(i)) => self.select_local_device(i),
-            Some(DeviceRow::Connect(i)) => self.select_connect_device(i),
-            _ => {} // header or out of range
         }
     }
 
@@ -1762,7 +1717,6 @@ impl App {
                 v.extend(self.playlists.iter().map(|p| p.name.clone()));
                 v
             }
-            View::Devices => self.devices.iter().map(|d| d.name.clone()).collect(),
             View::Search | View::Settings | View::Home => Vec::new(),
         }
     }
@@ -1995,7 +1949,7 @@ impl App {
     /// Handle a key in the Settings view. Returns `true` if it was consumed
     /// (arrows/Enter edit settings); other keys fall through to the keymap.
     fn handle_settings_key(&mut self, key: KeyEvent) -> bool {
-        let rows = SettingRow::all();
+        let rows = self.setting_rows();
         let len = rows.len();
         self.settings_sel = self.settings_sel.min(len - 1);
         match key.code {
@@ -2059,7 +2013,8 @@ impl App {
                 let _ = self.config.save();
             }
             SettingRow::ArtMode => self.cycle_art_mode(dir),
-            SettingRow::ReAuth => {}
+            // Output devices and Re-auth act on Enter, not arrows.
+            SettingRow::OutputLocal(_) | SettingRow::OutputConnect(_) | SettingRow::ReAuth => {}
         }
     }
 
@@ -2074,6 +2029,8 @@ impl App {
                 let _ = self.config.save();
             }
             SettingRow::Volume => {}
+            SettingRow::OutputLocal(i) => self.select_local_device(i),
+            SettingRow::OutputConnect(i) => self.select_connect_device(i),
             SettingRow::ReAuth => self.reauthenticate(),
         }
     }
@@ -2640,10 +2597,8 @@ impl App {
                 self.liked.extend(uris);
             }
             Update::ConnectDevices(devs) => {
+                // Rebuilt into the Settings → Output rows on the next render.
                 self.connect_devices = devs;
-                if self.view == View::Devices {
-                    self.refresh_devices();
-                }
             }
             Update::RemoteState(state) => {
                 if self.remote_active() {
