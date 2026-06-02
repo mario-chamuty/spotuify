@@ -381,33 +381,21 @@ fn render_cover(f: &mut Frame, app: &mut App, area: Rect) {
 
     let art_drawn = crate::albumart::render_into(app, f, area, cols, rows);
     if !art_drawn {
-        let placeholder = Paragraph::new(if app.player.current_track().is_some() {
-            "\n  ♪  loading cover…"
+        // Only shown when no art is drawn — never over a working cover. In a
+        // pixel mode (sixel/kitty), add a hint since those can silently render
+        // nothing in terminals that don't support the chosen protocol.
+        let msg = if app.player.current_track().is_none() {
+            "\n  nothing playing".to_string()
+        } else if app.image_picker.is_some() {
+            "\n  ♪  loading cover…\n\n  no image? try another\n  Album-art mode in Settings".to_string()
         } else {
-            "\n  nothing playing"
-        })
-        .style(Style::default().fg(theme.dim));
-        f.render_widget(placeholder, area);
-    }
-
-    // Pixel protocols (sixel/kitty/iTerm) can render nothing in terminals that
-    // don't actually support them, with no error. When one is active and a
-    // cover is expected, caption the area so a blank box is explained.
-    let has_cover = app
-        .displayed_track()
-        .is_some_and(|t| t.album_art_url.is_some());
-    if app.image_picker.is_some() && has_cover && area.height >= 2 {
-        let hint = Rect {
-            x: area.x,
-            y: area.y + area.height - 1,
-            width: area.width,
-            height: 1,
+            "\n  ♪  loading cover…".to_string()
         };
         f.render_widget(
-            Paragraph::new("no cover? switch Album-art mode in Settings (←/→)")
-                .style(Style::default().fg(theme.dim).add_modifier(Modifier::ITALIC))
+            Paragraph::new(msg)
+                .style(Style::default().fg(theme.dim))
                 .alignment(Alignment::Center),
-            hint,
+            area,
         );
     }
 }
