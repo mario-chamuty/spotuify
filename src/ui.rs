@@ -422,14 +422,24 @@ fn section_body(f: &mut Frame, theme: Theme, area: Rect, title: &str) -> Rect {
 /// largest centred square that fits and recording it in `app.art_size` so the
 /// fetcher requests the cover at the current scale.
 fn render_cover(f: &mut Frame, app: &mut App, area: Rect) {
+    // Largest cover height (cells); keeps it a sensible album size instead of
+    // ballooning to fill a big panel.
+    const MAX_ART_ROWS: u16 = 18;
     let theme = app.theme;
     // Cells are ~twice as tall as wide and a half-block packs two pixels per
-    // cell, so cols ≈ 2·rows keeps the art square.
-    let rows = area.height.min(area.width / 2).max(1);
+    // cell, so cols ≈ 2·rows keeps the art square. Cap the size so the cover
+    // doesn't balloon to fill a large panel, and centre it in the area.
+    let rows = area.height.min(area.width / 2).clamp(1, MAX_ART_ROWS);
     let cols = (rows * 2).min(area.width);
     app.art_size = (cols, rows);
+    let cover = Rect {
+        x: area.x + (area.width.saturating_sub(cols)) / 2,
+        y: area.y + (area.height.saturating_sub(rows)) / 2,
+        width: cols,
+        height: rows,
+    };
 
-    let art_drawn = crate::albumart::render_into(app, f, area, cols, rows);
+    let art_drawn = crate::albumart::render_into(app, f, cover, cols, rows);
     if !art_drawn {
         // Only shown when no art is drawn — never over a working cover. In a
         // pixel mode (sixel/kitty), add a hint since those can silently render
