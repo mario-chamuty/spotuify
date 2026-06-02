@@ -1,6 +1,6 @@
 [package]
 name = "spotuify"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 description = "A terminal UI Spotify client for Linux with local playback, search, playlists, queues, output selection and colored album art."
 license = "MIT"
@@ -63,6 +63,12 @@ serde_json = "1.0.150"
 regex = "1"
 ratatui-image = "4"
 
+# In-place self-update: download the matching release asset and swap the running
+# binary. `self-replace` does the cross-platform exe swap (incl. Windows, where a
+# running exe can't be overwritten directly). Archive extraction is per-platform
+# below (tar.gz on Unix, zip on Windows).
+self-replace = "1"
+
 # TOTP (HMAC-SHA1) used to mint web-player access tokens from the sp_dc cookie,
 # which unlocks Spotify's private Home GraphQL (Daily Mixes, genre/mood shelves).
 hmac = "0.12"
@@ -100,6 +106,13 @@ windows = { version = "0.44", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+# Extract the self-update zip (release assets are .zip on Windows). Deflate only
+# (what Compress-Archive produces); default features pull C codecs we don't need.
+[target.'cfg(target_os = "windows")'.dependencies.zip]
+version = "2"
+default-features = false
+features = ["deflate"]
+
 # CoreFoundation run loop, needed to deliver MPRemoteCommandCenter events.
 # The -sys crate (already in souvlaki's macOS graph via core-graphics) gives the
 # raw CFRunLoopRunInMode FFI we drive the event loop with.
@@ -107,8 +120,11 @@ windows = { version = "0.44", features = [
 core-foundation-sys = "0.8"
 
 # Unix-only: used to redirect the C audio libraries' stderr away from the TUI.
+# flate2 + tar extract the self-update tarball (release assets are .tar.gz).
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+flate2 = "1"
+tar = "0.4"
 
 [profile.release]
 opt-level = 3

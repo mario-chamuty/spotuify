@@ -130,6 +130,8 @@ pub enum SettingRow {
     OutputLocal(usize),
     /// A Spotify Connect device (index into `App::connect_devices`).
     OutputConnect(usize),
+    /// Toggle the startup "newer release?" check.
+    CheckUpdates,
     ReAuth,
 }
 
@@ -258,6 +260,9 @@ pub struct App {
 
     /// Set once the startup check finds a newer GitHub release.
     pub update_available: Option<crate::update::UpdateInfo>,
+    /// Set when the user triggers an in-app update; `main` performs it (download
+    /// + swap + relaunch) once the TUI has been torn down.
+    pub pending_update: Option<crate::update::UpdateInfo>,
 
     /// When the last playback-session reconnect was attempted, to back off if
     /// reconnection keeps failing (e.g. while offline).
@@ -414,6 +419,7 @@ impl App {
             lyrics_scroll: 0,
             lyrics_view_h: 0,
             update_available: None,
+            pending_update: None,
             last_reconnect_attempt: None,
             eq_open: false,
             eq_sel: 0,
@@ -488,7 +494,9 @@ impl App {
 
         self.spawn_load_playlists();
         self.refresh_output_devices();
-        self.spawn_check_update();
+        if self.config.check_for_updates {
+            self.spawn_check_update();
+        }
 
         while !self.should_quit {
             terminal.draw(|f| ui::draw(f, self))?;
@@ -711,7 +719,30 @@ impl App {
             Action::DeletePlaylist => self.delete_selected_playlist(),
             Action::CycleTabBack => self.cycle_view_back(),
             Action::OpenArtist => self.open_artist_from_selection(),
+            Action::UpdateNow => self.start_update(),
+            Action::DismissUpdate => {
+                if self.update_available.take().is_some() {
+                    self.status = "Update notification dismissed.".to_string();
+                }
+            }
         }
+    }
+
+    /// Begin the in-app update: hand the pending release to `main` and quit the
+    /// TUI so the download + swap + relaunch happen on the normal screen.
+    fn start_update(&mut self) {
+        let Some(info) = self.update_available.clone() else {
+            return; // nothing to update to; the badge isn't showing
+        };
+        if !crate::update::can_self_update() {
+            self.status = format!(
+                "No prebuilt binary for this platform — download v{} from {}",
+                info.latest, info.url
+            );
+            return;
+        }
+        self.pending_update = Some(info);
+        self.should_quit = true;
     }
 
     fn show_help(&mut self) {
@@ -1106,6 +1137,7 @@ impl App {
         v.push(SettingRow::ArtSize);
         v.extend((0..self.devices.len()).map(SettingRow::OutputLocal));
         v.extend((0..self.connect_devices.len()).map(SettingRow::OutputConnect));
+        v.push(SettingRow::CheckUpdates);
         v.push(SettingRow::ReAuth);
         v
     }
@@ -2163,6 +2195,15 @@ impl App {
                 self.rebuild_pixel_art();
                 self.status = format!("Album-art size: {next} rows");
             }
+            SettingRow::CheckUpdates => {
+                self.config.check_for_updates = !self.config.check_for_updates;
+                // Turning checks off also clears any badge already showing.
+                if !self.config.check_for_updates {
+                    self.update_available = None;
+                }
+                let _ = self.config.save();
+                self.status = format!("Update checks {}", on_off(self.config.check_for_updates));
+            }
             // Output devices and Re-auth act on Enter, not arrows.
             SettingRow::OutputLocal(_) | SettingRow::OutputConnect(_) | SettingRow::ReAuth => {}
         }
@@ -2171,9 +2212,8 @@ impl App {
     fn activate_setting(&mut self, row: SettingRow) {
         match row {
             SettingRow::Normalisation | SettingRow::EqEnabled | SettingRow::ArtMode
-            | SettingRow::EqPreset | SettingRow::Quality | SettingRow::ArtSize => {
-                self.adjust_setting(row, 1)
-            }
+            | SettingRow::EqPreset | SettingRow::Quality | SettingRow::ArtSize
+            | SettingRow::CheckUpdates => self.adjust_setting(row, 1),
             SettingRow::EqBand(i) => {
                 let eq = self.player.eq();
                 eq.adjust(i, -eq.gain(i)); // reset band to 0 dB

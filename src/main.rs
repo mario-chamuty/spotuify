@@ -137,7 +137,52 @@ async fn main() -> Result<()> {
         eprintln!("SpoTUIfy exited with an error: {e:?}");
         std::process::exit(1);
     }
+
+    // The user triggered an in-app update: now that the TUI is gone, download
+    // and swap the binary on the normal screen, then relaunch into it.
+    if let Some(info) = app.pending_update.clone() {
+        println!(
+            "\n  Updating SpoTUIfy v{} → v{} …",
+            env!("CARGO_PKG_VERSION"),
+            info.latest
+        );
+        match update::download_and_install(&info).await {
+            Ok(v) => {
+                println!("  Updated to v{v}. Restarting…\n");
+                relaunch();
+            }
+            Err(e) => {
+                eprintln!("\n  Update failed: {e:#}");
+                eprintln!("  You can download it manually: {}\n", info.url);
+                std::process::exit(1);
+            }
+        }
+    }
     Ok(())
+}
+
+/// Re-exec the (freshly updated) binary in place, passing through the original
+/// arguments. Diverges: on success the process is replaced (Unix) or a new one
+/// is spawned and this one exits (Windows).
+fn relaunch() -> ! {
+    let exe = std::env::current_exe().unwrap_or_else(|e| {
+        eprintln!("  Couldn't locate the updated binary to restart: {e}");
+        std::process::exit(0);
+    });
+    let args: Vec<String> = std::env::args().skip(1).collect();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let err = std::process::Command::new(&exe).args(&args).exec();
+        eprintln!("  Restart failed ({err}); please start SpoTUIfy again.");
+        std::process::exit(1);
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = std::process::Command::new(&exe).args(&args).spawn();
+        std::process::exit(0);
+    }
 }
 
 /// Mint a web-player token from the `sp_dc` cookie and print the real Home

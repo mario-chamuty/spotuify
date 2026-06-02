@@ -589,10 +589,18 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
     ]));
     f.render_widget(p, area);
 
-    // Right-aligned "update available" badge, drawn over the status row.
+    // Right-aligned "update available" badge, drawn over the status row. Shows
+    // the bound keys so the update/dismiss actions are discoverable.
     if let Some(u) = &app.update_available {
+        let dismiss = app.keymap.display(crate::keys::Action::DismissUpdate);
+        let label = if crate::update::can_self_update() {
+            let update = app.keymap.display(crate::keys::Action::UpdateNow);
+            format!(" ⬆ v{} · {update} update · {dismiss} dismiss ", u.latest)
+        } else {
+            format!(" ⬆ v{} available · {dismiss} dismiss ", u.latest)
+        };
         let badge = Paragraph::new(Line::from(Span::styled(
-            format!(" ⬆ v{} available ", u.latest),
+            label,
             Style::default()
                 .fg(Color::Black)
                 .bg(theme.accent)
@@ -927,6 +935,10 @@ fn render_settings(f: &mut Frame, app: &App, area: Rect) {
                     lines.push(Line::from(Span::styled("   Spotify Connect", dim)));
                 }
             }
+            SettingRow::CheckUpdates => {
+                lines.push(Line::from(""));
+                lines.push(header("Updates"));
+            }
             SettingRow::ReAuth => {
                 lines.push(Line::from(""));
                 lines.push(header("Account"));
@@ -1023,6 +1035,10 @@ fn render_settings(f: &mut Frame, app: &App, area: Rect) {
             SettingRow::ArtSize => {
                 ("Art size".to_string(), format!("‹ {} rows ›", app.config.art_size))
             }
+            SettingRow::CheckUpdates => (
+                "Check for updates".to_string(),
+                on_off(app.config.check_for_updates).to_string(),
+            ),
             SettingRow::ReAuth => ("Re-authenticate".to_string(), "press Enter".to_string()),
             // Output rows handled above (with `continue`).
             SettingRow::OutputLocal(_) | SettingRow::OutputConnect(_) => unreachable!(),

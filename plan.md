@@ -35,3 +35,18 @@ Tasks:
 - [x] Write client_id to config.toml, then continue straight into OAuth (no restart)
 - [x] Targeted handling of the OAuth redirect-URI-mismatch error
 - [ ] Compile-check; user test the first-run flow
+
+## In-app self-update (opt-in) + disable-checks setting
+
+The startup check is notify-only. Add an in-app, opt-in self-update triggered
+from the status-bar badge, plus a setting to stop checking.
+
+- [x] Config: `check_for_updates: bool` (default true); gate the startup check on it
+- [x] Settings view: "Updates" section with a "Check for updates" toggle
+- [x] Keybinds: `Action::UpdateNow` (alt+u), `Action::DismissUpdate` (alt+d); shown in the badge
+- [x] Badge shows the bound keys (only offer update where a prebuilt asset exists)
+- [x] `update::download_and_install`: async reqwest download + extract (tar.gz unix / zip windows) + `self_replace` swap
+- [x] Trigger flow: Alt+U sets pending update + quits; main installs after the TUI exits, then relaunches
+- [x] Deps: self-replace (all), flate2+tar (unix), zip (windows)
+- [x] Compile-check on Windows host + CI for macOS/Linux; user test the update flow <!-- NOTE: Windows cargo clippy + 12 tests pass; macOS/Linux via CI PR -->
+- [ ] User test: trigger update from the badge (Alt+U), confirm download/swap/relaunch; toggle the setting

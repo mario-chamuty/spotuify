@@ -15,6 +15,11 @@ use crate::theme::ThemeConfig;
 
 const APP_DIR: &str = "spotuify";
 
+/// serde default for boolean fields that should default to `true`.
+fn default_true() -> bool {
+    true
+}
+
 /// User-editable settings, serialized as TOML.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -38,6 +43,12 @@ pub struct Config {
     /// local browser profile. Set it only to override auto-detection.
     #[serde(default)]
     pub sp_dc: String,
+
+    /// Check GitHub for a newer release once at startup and show a status-bar
+    /// badge if one exists. The update itself is opt-in (triggered from the
+    /// badge); set this to false to disable the check entirely.
+    #[serde(default = "default_true")]
+    pub check_for_updates: bool,
 
     /// librespot audio backend. "rodio" works everywhere via cpal.
     pub audio_backend: String,
@@ -172,6 +183,7 @@ impl Default for Config {
             client_id: String::new(),
             redirect_uri: "http://127.0.0.1:8888/callback".to_string(),
             sp_dc: String::new(),
+            check_for_updates: true,
             audio_backend: "rodio".to_string(),
             audio_device: None,
             volume: 70,
