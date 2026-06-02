@@ -1,6 +1,6 @@
 [package]
 name = "spotuify"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 description = "A terminal UI Spotify client for Linux with local playback, search, playlists, queues, output selection and colored album art."
 license = "MIT"
@@ -80,6 +80,31 @@ sha2 = "0.10"
 # MPRIS (D-Bus) media controls are a freedesktop/Linux feature.
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = { version = "5.15.0", default-features = false, features = ["tokio"] }
+
+# Cross-platform media keys + "Now Playing" on Windows (SMTC) and macOS
+# (MPRemoteCommandCenter). Linux keeps the hand-rolled MPRIS service above, so
+# souvlaki is only pulled off Linux. default-features off: we never use its
+# D-Bus backend, which avoids pulling the `dbus` C library into any build.
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+souvlaki = { version = "0.8", default-features = false }
+
+# Win32 window + COM init to host the SMTC controls. Pinned to souvlaki's own
+# `windows` version (0.44) so the windows crate is built once, not twice.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.44", features = [
+    "Win32_Foundation",
+    # WNDCLASSW / RegisterClassW are gated behind the GDI feature in 0.44.
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+# CoreFoundation run loop, needed to deliver MPRemoteCommandCenter events.
+# The -sys crate (already in souvlaki's macOS graph via core-graphics) gives the
+# raw CFRunLoopRunInMode FFI we drive the event loop with.
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation-sys = "0.8"
 
 # Unix-only: used to redirect the C audio libraries' stderr away from the TUI.
 [target.'cfg(unix)'.dependencies]

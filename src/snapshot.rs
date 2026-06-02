@@ -4,9 +4,8 @@
 //! publish snapshots everywhere, while the MPRIS service that consumes them is
 //! compiled only on Linux.
 
-// The fields are consumed by the MPRIS service, which is compiled only on
-// Linux; elsewhere the snapshot is still built and published but never read.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+// Consumed by the platform media-control layer: the MPRIS service on Linux
+// (`mpris.rs`), the souvlaki integration elsewhere (`media.rs`).
 #[derive(Debug, Clone, Default)]
 pub struct Snapshot {
     pub playing: bool,
@@ -23,6 +22,10 @@ pub struct Snapshot {
     pub position_us: i64,
     /// Volume as a 0.0..=1.0 fraction.
     pub volume: f64,
+    // Only the MPRIS `CanGoNext`/`CanGoPrevious` properties use these; souvlaki
+    // has no equivalent, so they're unread off Linux.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub can_next: bool,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub can_prev: bool,
 }
