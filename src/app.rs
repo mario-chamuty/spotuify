@@ -30,6 +30,10 @@ pub type Tui = Terminal<CrosstermBackend<Stdout>>;
 /// Volume step, in percent.
 const VOLUME_STEP: i32 = 1;
 
+/// Bounds for the configurable album-art height, in rows.
+pub const ART_SIZE_MIN: u16 = 6;
+pub const ART_SIZE_MAX: u16 = 40;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
     Search,
@@ -121,6 +125,7 @@ pub enum SettingRow {
     EqPreset,
     EqBand(usize),
     ArtMode,
+    ArtSize,
     /// A local audio-output device (index into `App::devices`).
     OutputLocal(usize),
     /// A Spotify Connect device (index into `App::connect_devices`).
@@ -234,6 +239,9 @@ pub struct App {
     base_picker: Option<ratatui_image::picker::Picker>,
     pub pixel_art: Option<PixelArt>,
     pixel_pending: Option<String>,
+    /// The decoded cover for the current track, kept so the pixel protocol can
+    /// be rebuilt at a new size (art-size/mode change) without re-downloading.
+    pixel_image: Option<(String, image::DynamicImage)>,
 
     // Lyrics. Shown in the Now Playing panel (in place of art) when toggled on.
     pub show_lyrics: bool,
@@ -398,6 +406,7 @@ impl App {
             base_picker: None,
             pixel_art: None,
             pixel_pending: None,
+            pixel_image: None,
             show_lyrics: false,
             lyrics: None,
             lyrics_for: None,
@@ -1094,6 +1103,7 @@ impl App {
         ];
         v.extend((0..crate::eq::BANDS).map(SettingRow::EqBand));
         v.push(SettingRow::ArtMode);
+        v.push(SettingRow::ArtSize);
         v.extend((0..self.devices.len()).map(SettingRow::OutputLocal));
         v.extend((0..self.connect_devices.len()).map(SettingRow::OutputConnect));
         v.push(SettingRow::ReAuth);
@@ -2142,6 +2152,17 @@ impl App {
                 let _ = self.config.save();
             }
             SettingRow::ArtMode => self.cycle_art_mode(dir),
+            SettingRow::ArtSize => {
+                let step = 2 * dir;
+                let next = (self.config.art_size as i32 + step)
+                    .clamp(ART_SIZE_MIN as i32, ART_SIZE_MAX as i32) as u16;
+                self.config.art_size = next;
+                let _ = self.config.save();
+                // Re-encode the pixel cover at the new size (half-blocks
+                // re-render automatically on the size change).
+                self.rebuild_pixel_art();
+                self.status = format!("Album-art size: {next} rows");
+            }
             // Output devices and Re-auth act on Enter, not arrows.
             SettingRow::OutputLocal(_) | SettingRow::OutputConnect(_) | SettingRow::ReAuth => {}
         }
@@ -2150,7 +2171,9 @@ impl App {
     fn activate_setting(&mut self, row: SettingRow) {
         match row {
             SettingRow::Normalisation | SettingRow::EqEnabled | SettingRow::ArtMode
-            | SettingRow::EqPreset | SettingRow::Quality => self.adjust_setting(row, 1),
+            | SettingRow::EqPreset | SettingRow::Quality | SettingRow::ArtSize => {
+                self.adjust_setting(row, 1)
+            }
             SettingRow::EqBand(i) => {
                 let eq = self.player.eq();
                 eq.adjust(i, -eq.gain(i)); // reset band to 0 dB
@@ -2223,17 +2246,29 @@ impl App {
         let next = (cur + dir).rem_euclid(order.len() as i32) as usize;
         self.config.art_mode = order[next];
         let _ = self.config.save();
-        // Apply immediately: re-derive the picker and drop cached art so the new
-        // renderer takes over on the next frame — no restart required.
+        // Apply immediately: re-derive the picker and rebuild the cover so the
+        // new renderer takes over on the next frame — no restart required. The
+        // pixel protocol is rebuilt from the cached image (no re-download).
         self.image_picker = self.derive_picker();
         self.art = None;
         self.art_pending = None;
-        self.pixel_art = None;
-        self.pixel_pending = None;
+        self.rebuild_pixel_art();
         self.status = format!(
             "Album-art mode: {}",
             format!("{:?}", self.config.art_mode).to_lowercase()
         );
+    }
+
+    /// (Re)build the pixel-graphics protocol from the cached decoded cover, so
+    /// a size or mode change re-encodes it without re-downloading.
+    fn rebuild_pixel_art(&mut self) {
+        self.pixel_art = match (self.image_picker.as_ref(), self.pixel_image.as_ref()) {
+            (Some(picker), Some((uri, img))) => Some(PixelArt {
+                track_uri: uri.clone(),
+                protocol: picker.new_resize_protocol(img.clone()),
+            }),
+            _ => None,
+        };
     }
 
     fn reauthenticate(&mut self) {
@@ -2353,6 +2388,7 @@ impl App {
         self.art_pending = None;
         self.pixel_art = None;
         self.pixel_pending = None;
+        self.pixel_image = None;
         self.lyrics = None;
         self.lyrics_for = None;
         self.lyrics_pending = None;
@@ -2733,9 +2769,11 @@ impl App {
                 self.pixel_pending = None;
                 let still_current =
                     self.displayed_track().map(|t| t.uri.as_str()) == Some(track_uri.as_str());
-                if let (true, Some(picker)) = (still_current, self.image_picker.as_ref()) {
-                    let protocol = picker.new_resize_protocol(image);
-                    self.pixel_art = Some(PixelArt { track_uri, protocol });
+                if still_current {
+                    // Keep the decoded image so the protocol can be rebuilt at a
+                    // new size without re-downloading.
+                    self.pixel_image = Some((track_uri, image));
+                    self.rebuild_pixel_art();
                 }
             }
             Update::Liked(uris) => {

@@ -66,6 +66,10 @@ pub struct Config {
     /// falls back to coloured half-blocks otherwise.
     pub art_mode: ArtMode,
 
+    /// Album-art height, in terminal rows (the cover is square). Clamped to a
+    /// sensible range; adjustable from Settings.
+    pub art_size: u16,
+
     /// Override the terminal cell size in pixels, `[width, height]`, for
     /// sixel/kitty art. Normally auto-detected; set this only if covers render
     /// too small/large or off-centre because your terminal misreports its cell
@@ -175,6 +179,7 @@ impl Default for Config {
             normalisation: true,
             audio_quality: AudioQuality::High,
             art_mode: ArtMode::Auto,
+            art_size: 18,
             cell_pixel_size: None,
             theme: ThemeConfig::default(),
             keys: HashMap::new(),

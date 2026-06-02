@@ -422,14 +422,16 @@ fn section_body(f: &mut Frame, theme: Theme, area: Rect, title: &str) -> Rect {
 /// largest centred square that fits and recording it in `app.art_size` so the
 /// fetcher requests the cover at the current scale.
 fn render_cover(f: &mut Frame, app: &mut App, area: Rect) {
-    // Largest cover height (cells); keeps it a sensible album size instead of
-    // ballooning to fill a big panel.
-    const MAX_ART_ROWS: u16 = 18;
     let theme = app.theme;
     // Cells are ~twice as tall as wide and a half-block packs two pixels per
-    // cell, so cols ≈ 2·rows keeps the art square. Cap the size so the cover
-    // doesn't balloon to fill a large panel, and centre it in the area.
-    let rows = area.height.min(area.width / 2).clamp(1, MAX_ART_ROWS);
+    // cell, so cols ≈ 2·rows keeps the art square. Cap the height to the
+    // user's configured size so the cover doesn't fill the panel, and centre
+    // it in the area.
+    let max_rows = app
+        .config
+        .art_size
+        .clamp(crate::app::ART_SIZE_MIN, crate::app::ART_SIZE_MAX);
+    let rows = area.height.min(area.width / 2).clamp(1, max_rows);
     let cols = (rows * 2).min(area.width);
     app.art_size = (cols, rows);
     let cover = Rect {
@@ -1017,6 +1019,9 @@ fn render_settings(f: &mut Frame, app: &App, area: Rect) {
             }
             SettingRow::ArtMode => {
                 ("Album art".to_string(), format!("{:?}", app.config.art_mode).to_lowercase())
+            }
+            SettingRow::ArtSize => {
+                ("Art size".to_string(), format!("‹ {} rows ›", app.config.art_size))
             }
             SettingRow::ReAuth => ("Re-authenticate".to_string(), "press Enter".to_string()),
             // Output rows handled above (with `continue`).
