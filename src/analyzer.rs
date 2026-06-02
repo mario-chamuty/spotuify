@@ -15,6 +15,13 @@ const SAMPLE_RATE: f64 = 44_100.0;
 /// Samples between RMS updates (~23 ms at 44.1 kHz).
 const WINDOW: usize = 1024;
 
+/// The probe taps samples as librespot writes them, but the rodio backend
+/// buffers ~0.5 s before they reach the speakers (it blocks while its queue
+/// holds >26 packets). Without compensation the bars lead the audio by that
+/// much. We publish each window's energy delayed by this many windows so the
+/// spectrum lines up with what's actually heard. 21 windows ≈ 0.49 s.
+const DELAY_WINDOWS: usize = 21;
+
 /// Per-band RMS levels: written by the audio probe, read by the UI.
 pub struct SpectrumState {
     bands: [AtomicU32; BANDS],
@@ -46,6 +53,10 @@ pub struct SpectrumProbe {
     sumsq: [f64; BANDS],
     count: usize,
     state: SharedSpectrum,
+    /// Ring of recent per-band RMS frames; we publish the oldest so the
+    /// spectrum is delayed to match the audio output buffer (see DELAY_WINDOWS).
+    delay: Vec<[f32; BANDS]>,
+    delay_pos: usize,
 }
 
 impl SpectrumProbe {
@@ -55,6 +66,8 @@ impl SpectrumProbe {
             sumsq: [0.0; BANDS],
             count: 0,
             state,
+            delay: vec![[0.0; BANDS]; DELAY_WINDOWS.max(1)],
+            delay_pos: 0,
         }
     }
 
@@ -72,12 +85,22 @@ impl SpectrumProbe {
             }
             self.count += 1;
             if self.count >= WINDOW {
-                for b in 0..BANDS {
-                    let rms = (self.sumsq[b] / self.count as f64).sqrt() as f32;
-                    self.state.set_band(b, rms);
-                    self.sumsq[b] = 0.0;
+                // This window's energy per band.
+                let mut frame = [0.0f32; BANDS];
+                for (slot, sq) in frame.iter_mut().zip(self.sumsq.iter_mut()) {
+                    *slot = (*sq / self.count as f64).sqrt() as f32;
+                    *sq = 0.0;
                 }
                 self.count = 0;
+
+                // Publish the frame from DELAY_WINDOWS ago (delay line in the
+                // audio-sample domain), then store this one in its slot.
+                let delayed = self.delay[self.delay_pos];
+                self.delay[self.delay_pos] = frame;
+                self.delay_pos = (self.delay_pos + 1) % self.delay.len();
+                for (b, &v) in delayed.iter().enumerate() {
+                    self.state.set_band(b, v);
+                }
             }
         }
     }
