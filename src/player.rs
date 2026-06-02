@@ -69,6 +69,12 @@ pub struct Player {
     inner: Arc<LibrespotPlayer>,
     mixer: Arc<SoftMixer>,
 
+    // Kept so the session can be rebuilt if its connection drops: librespot
+    // sessions can't be reused once invalidated, so reconnecting means making a
+    // fresh `Session` from the same cached credentials.
+    cache: Cache,
+    credentials: Credentials,
+
     // Parameters needed to rebuild `inner` when the output device changes.
     player_config: PlayerConfig,
     backend: String,
@@ -105,9 +111,9 @@ impl Player {
         // to issue streaming/audio tokens for development-mode app ids, so a
         // custom `client_id` here causes a 400 on every audio load.
         let session_config = SessionConfig::default();
-        let session = Session::new(session_config, Some(cache));
+        let session = Session::new(session_config, Some(cache.clone()));
         session
-            .connect(credentials, true)
+            .connect(credentials.clone(), true)
             .await
             .context("connecting to Spotify (is this a Premium account?)")?;
 
@@ -146,6 +152,8 @@ impl Player {
             session,
             inner,
             mixer,
+            cache,
+            credentials,
             player_config,
             backend,
             audio_format,
@@ -452,6 +460,45 @@ impl Player {
 
     pub fn current_device(&self) -> Option<&str> {
         self.device.as_deref()
+    }
+
+    // ---- Session health ----------------------------------------------------
+
+    /// Whether the playback session's connection has dropped. librespot can't
+    /// reuse an invalidated session, so this signals that [`Self::reconnect`]
+    /// is needed before playback will work again.
+    pub fn session_invalid(&self) -> bool {
+        self.session.is_invalid()
+    }
+
+    /// Re-establish the playback session after its connection dropped (Spotify
+    /// drops idle/aged connections, after which loads silently fail until a new
+    /// session is made). Rebuilds the player and resumes the current track.
+    pub async fn reconnect(&mut self) -> Result<()> {
+        let resume_at = self.interpolated_position();
+        let resume = self.current_id.clone();
+        let was_playing = matches!(self.status, Status::Playing | Status::Loading);
+
+        // Prefer the reusable credentials librespot cached on first login; fall
+        // back to the ones we connected with.
+        let credentials = self.cache.credentials().unwrap_or_else(|| self.credentials.clone());
+        let session = Session::new(SessionConfig::default(), Some(self.cache.clone()));
+        session
+            .connect(credentials, true)
+            .await
+            .context("reconnecting playback session")?;
+        self.session = session;
+        self.rebuild()?;
+
+        // A restored/aged track must be reloaded into the fresh session.
+        self.loaded = false;
+        if let (Some(uri), true) = (resume, was_playing) {
+            self.inner.load(uri, true, resume_at);
+            self.set_position(resume_at);
+            self.loaded = true;
+            self.status = Status::Loading;
+        }
+        Ok(())
     }
 
     // ---- Event handling ----------------------------------------------------

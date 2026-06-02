@@ -251,6 +251,10 @@ pub struct App {
     /// Set once the startup check finds a newer GitHub release.
     pub update_available: Option<crate::update::UpdateInfo>,
 
+    /// When the last playback-session reconnect was attempted, to back off if
+    /// reconnection keeps failing (e.g. while offline).
+    last_reconnect_attempt: Option<std::time::Instant>,
+
     // Equalizer overlay.
     pub eq_open: bool,
     pub eq_sel: usize,
@@ -395,6 +399,7 @@ impl App {
             lyrics_for: None,
             lyrics_pending: None,
             update_available: None,
+            last_reconnect_attempt: None,
             eq_open: false,
             eq_sel: 0,
             help_open: false,
@@ -485,7 +490,10 @@ impl App {
                     }
                 }
                 _ = ticker.tick() => {}
-                _ = remote_poll.tick() => self.spawn_poll_remote(),
+                _ = remote_poll.tick() => {
+                    self.spawn_poll_remote();
+                    self.ensure_session().await;
+                }
                 _ = viz_poll.tick() => self.update_spectrum(),
                 Some(event) = player_events.recv() => {
                     if self.player.on_event(event) {
@@ -1079,6 +1087,29 @@ impl App {
     }
 
     /// Poll remote playback state (only meaningful in remote mode).
+    /// If the playback session's connection has dropped, rebuild it so songs
+    /// keep loading without a restart. Throttled so a persistent failure (e.g.
+    /// offline) doesn't stall the UI on every poll.
+    async fn ensure_session(&mut self) {
+        if !self.player.session_invalid() {
+            return;
+        }
+        if let Some(t) = self.last_reconnect_attempt {
+            if t.elapsed() < std::time::Duration::from_secs(8) {
+                return;
+            }
+        }
+        self.last_reconnect_attempt = Some(std::time::Instant::now());
+        self.status = "Playback connection lost — reconnecting…".to_string();
+        match self.player.reconnect().await {
+            Ok(()) => self.status = "Reconnected to Spotify.".to_string(),
+            Err(e) => {
+                tracing::warn!("session reconnect failed: {e:#}");
+                self.status = format!("Reconnect failed: {e}");
+            }
+        }
+    }
+
     fn spawn_poll_remote(&self) {
         if !self.remote_active() {
             return;
