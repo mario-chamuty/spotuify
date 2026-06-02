@@ -66,6 +66,13 @@ pub struct Config {
     /// falls back to coloured half-blocks otherwise.
     pub art_mode: ArtMode,
 
+    /// Override the terminal cell size in pixels, `[width, height]`, for
+    /// sixel/kitty art. Normally auto-detected; set this only if covers render
+    /// too small/large or off-centre because your terminal misreports its cell
+    /// size (the log prints the detected size at startup). E.g. `[9, 18]`.
+    #[serde(default)]
+    pub cell_pixel_size: Option<(u16, u16)>,
+
     /// Colour theme overrides (`[theme]` table). Unset fields use the default
     /// Spotify-green look.
     #[serde(default)]
@@ -168,6 +175,7 @@ impl Default for Config {
             normalisation: true,
             audio_quality: AudioQuality::High,
             art_mode: ArtMode::Auto,
+            cell_pixel_size: None,
             theme: ThemeConfig::default(),
             keys: HashMap::new(),
             equalizer: EqConfig::default(),

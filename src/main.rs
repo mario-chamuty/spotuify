@@ -94,7 +94,7 @@ async fn main() -> Result<()> {
     // since detection queries the terminal on stdout/stdin. The app derives the
     // active picker from this for the configured art mode (and can re-derive it
     // live when the mode changes).
-    let base_picker = ratatui_image::picker::Picker::from_query_stdio().ok();
+    let base_picker = detect_base_picker(&config);
 
     // ALSA/JACK and other C audio libraries write diagnostics straight to fd 2,
     // which would scribble all over the alternate-screen TUI. Redirect stderr to
@@ -241,6 +241,53 @@ mod stderr_log {
     }
 }
 
+
+/// Detect the terminal's graphics capabilities + cell pixel size.
+///
+/// The cell pixel size matters for sixel/kitty: the image is sized as
+/// cells × cell-pixels, so a wrong cell size renders the cover too small (or
+/// overflowing). Many terminals don't answer ratatui-image's CSI font-size
+/// query, so we prefer the cell size derived from the terminal's reported
+/// window pixel dimensions (TIOCGWINSZ via crossterm), keeping the protocol
+/// type from the CSI query when it succeeded.
+fn detect_base_picker(config: &Config) -> Option<ratatui_image::picker::Picker> {
+    use ratatui_image::picker::Picker;
+
+    let queried = Picker::from_query_stdio().ok();
+
+    // Explicit user override wins.
+    if let Some((w, h)) = config.cell_pixel_size {
+        if w > 0 && h > 0 {
+            tracing::info!("cell size from config override: {:?}", (w, h));
+            let mut picker = Picker::from_fontsize((w, h));
+            if let Some(q) = queried {
+                picker.set_protocol_type(q.protocol_type());
+            }
+            return Some(picker);
+        }
+    }
+
+    if let Ok(ws) = crossterm::terminal::window_size() {
+        if ws.width > 0 && ws.height > 0 && ws.columns > 0 && ws.rows > 0 {
+            let cell = (ws.width / ws.columns, ws.height / ws.rows);
+            if cell.0 > 0 && cell.1 > 0 {
+                tracing::info!("cell size from window pixels: {cell:?}");
+                let mut picker = Picker::from_fontsize(cell);
+                if let Some(q) = queried {
+                    picker.set_protocol_type(q.protocol_type());
+                }
+                return Some(picker);
+            }
+        }
+    }
+
+    if let Some(q) = &queried {
+        tracing::info!("cell size from CSI query: {:?}", q.font_size());
+    } else {
+        tracing::info!("no terminal graphics detection; using half-block fallback");
+    }
+    queried
+}
 
 fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
     let path = config::log_path().ok()?;
