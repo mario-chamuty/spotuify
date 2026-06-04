@@ -503,7 +503,7 @@ fn render_lyrics(f: &mut Frame, app: &App, area: Rect) {
     };
 
     let height = area.height as usize;
-    let active = lyrics.active_line(app.playback_position());
+    let active = lyrics.active_line(app.lyrics_position());
     // Synced: keep the active line roughly centred. Unsynced: use the manual
     // scroll offset (PageUp/PageDown), clamped to the content.
     let start = match active {

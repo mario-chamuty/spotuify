@@ -1376,6 +1376,20 @@ impl App {
         }
     }
 
+    /// Playback position for driving synced-lyrics highlighting. Local playback
+    /// reports librespot's sink-feed position, which leads what's actually heard
+    /// by the rodio output buffer (see [`crate::analyzer::OUTPUT_LATENCY_MS`]);
+    /// subtract it so the highlighted line matches the audio. Remote playback
+    /// reports another device's true progress, so it's used unchanged.
+    pub fn lyrics_position(&self) -> u32 {
+        let pos = self.playback_position();
+        if self.remote_active() {
+            pos
+        } else {
+            pos.saturating_sub(crate::analyzer::OUTPUT_LATENCY_MS)
+        }
+    }
+
     /// Current playback status (derived from remote snapshot if remote).
     pub fn playback_status(&self) -> crate::player::Status {
         if self.remote_active() {

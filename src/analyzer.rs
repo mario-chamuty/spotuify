@@ -22,6 +22,12 @@ const WINDOW: usize = 1024;
 /// spectrum lines up with what's actually heard. 21 windows ≈ 0.49 s.
 const DELAY_WINDOWS: usize = 21;
 
+/// How far librespot's reported position leads what's actually heard, in
+/// milliseconds — the same rodio output-buffer latency the spectrum delay
+/// compensates for (see [`DELAY_WINDOWS`]). Synced lyrics subtract this from
+/// the local playback position so the highlighted line matches the audio.
+pub const OUTPUT_LATENCY_MS: u32 = (DELAY_WINDOWS * WINDOW * 1000 / 44_100) as u32;
+
 /// Per-band RMS levels: written by the audio probe, read by the UI.
 pub struct SpectrumState {
     bands: [AtomicU32; BANDS],
