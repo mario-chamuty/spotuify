@@ -1049,10 +1049,7 @@ impl App {
             }
         };
         match act {
-            A::Play(tracks, i) => {
-                self.player.play_tracks(tracks, i);
-                self.on_track_changed();
-            }
+            A::Play(tracks, i) => self.play_tracks(tracks, i),
             A::Artist(id, name) => self.spawn_open_artist(id, name),
             A::Playlist(id, label) => self.spawn_open_playlist(id, label, OpenMode::Show),
             A::Album(id, name) => self.spawn_open_album(id, name, OpenMode::Show),
@@ -1464,8 +1461,7 @@ impl App {
                     .and_then(|v| self.resolve_index(v))
                 {
                     let tracks = self.context_tracks.clone();
-                    self.player.play_tracks(tracks, i);
-                    self.on_track_changed();
+                    self.play_tracks(tracks, i);
                 }
             }
             View::Queue => {
@@ -1492,8 +1488,7 @@ impl App {
             Some(ArtistRow::Top(i)) => {
                 // `play_tracks` ignores an empty queue, so no guard needed.
                 let tracks = self.artist_top_tracks.clone();
-                self.player.play_tracks(tracks, i);
-                self.on_track_changed();
+                self.play_tracks(tracks, i);
             }
             Some(ArtistRow::Album(i)) => {
                 if let Some(a) = self.artist_albums.get(i) {
@@ -1519,8 +1514,7 @@ impl App {
         match results {
             SearchResults::Tracks(tracks) => {
                 let tracks = tracks.clone();
-                self.player.play_tracks(tracks, i);
-                self.on_track_changed();
+                self.play_tracks(tracks, i);
             }
             SearchResults::Albums(albums) => {
                 if let Some(a) = albums.get(i) {
@@ -1553,8 +1547,7 @@ impl App {
                         album_id: None,
                     })
                     .collect();
-                self.player.play_tracks(tracks, i);
-                self.on_track_changed();
+                self.play_tracks(tracks, i);
             }
             SearchResults::Shows(shows) => {
                 if let Some(s) = shows.get(i) {
@@ -1674,6 +1667,40 @@ impl App {
     }
 
     // ---- Transport: routes to the Connect device in remote mode, else local
+
+    /// Play `tracks` starting at `start`, routing to the active Connect device
+    /// in remote mode (Web API start-playback) or the local librespot player
+    /// otherwise. This is the single entry point every "play this song" action
+    /// goes through so selecting a track works in both modes.
+    fn play_tracks(&mut self, tracks: Vec<Track>, start: usize) {
+        if tracks.is_empty() {
+            return;
+        }
+        let Some(id) = self.remote_device_id.clone() else {
+            self.player.play_tracks(tracks, start);
+            self.on_track_changed();
+            return;
+        };
+        let start = start.min(tracks.len() - 1);
+        let uris: Vec<String> = tracks.iter().map(|t| t.uri.clone()).collect();
+        // Optimistic snapshot so the now-playing UI updates before the next
+        // remote poll (~1.5 s away) refreshes it from the device's real state.
+        let (volume_percent, shuffle) = self
+            .remote_state
+            .as_ref()
+            .map(|s| (s.volume_percent, s.shuffle))
+            .unwrap_or((None, false));
+        self.status = format!("Playing “{}” on remote device", tracks[start].name);
+        self.remote_state = Some(crate::model::RemoteState {
+            track: Some(tracks[start].clone()),
+            is_playing: true,
+            progress_ms: 0,
+            device_id: Some(id.clone()),
+            volume_percent,
+            shuffle,
+        });
+        self.remote_call(move |s| async move { s.remote_play_uris(&uris, start, &id).await });
+    }
 
     fn transport_toggle_pause(&mut self) {
         if let Some(id) = self.remote_device_id.clone() {
@@ -2808,8 +2835,7 @@ impl App {
                 self.spawn_refresh_liked(uris);
                 if mode == OpenMode::Play && count > 0 {
                     let tracks = self.context_tracks.clone();
-                    self.player.play_tracks(tracks, 0);
-                    self.on_track_changed();
+                    self.play_tracks(tracks, 0);
                 }
             }
             Update::AlbumArt { track_uri, cols, rows, lines } => {

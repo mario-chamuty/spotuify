@@ -622,6 +622,28 @@ impl Spotify {
         }))
     }
 
+    /// Start playback of an explicit track/episode list on a Connect device,
+    /// beginning at `offset` within the list. Used when the user picks a song
+    /// while in remote mode — the local librespot queue is bypassed entirely.
+    pub async fn remote_play_uris(
+        &self,
+        uris: &[String],
+        offset: usize,
+        device_id: &str,
+    ) -> Result<()> {
+        let playables = uris
+            .iter()
+            .map(|u| playable_from_uri(u))
+            .collect::<Result<Vec<_>>>()
+            .context("building playable uris")?;
+        // rspotify 0.13 encodes the list position as a `Duration`'s millis.
+        let offset = rspotify::model::Offset::Position(chrono::Duration::milliseconds(offset as i64));
+        self.client
+            .start_uris_playback(playables, Some(device_id), Some(offset), None)
+            .await
+            .context("remote play failed")
+    }
+
     /// Resume remote playback on the given device.
     pub async fn remote_resume(&self, device_id: &str) -> Result<()> {
         self.client
